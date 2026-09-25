@@ -54,7 +54,20 @@ export function MonitorView() {
   if (monitorError && !monitorStarted) {
     return (
       <div className="db-tab db-scroll">
-        <EmptyState icon={<ActivityIcon size={28} />} title="Monitor unavailable" body={monitorError} />
+        <EmptyState
+          icon={<ActivityIcon size={28} />}
+          title="Monitor unavailable"
+          body={monitorError}
+          action={
+            <button
+              type="button"
+              className="db-ink-button auto"
+              onClick={() => useMonitorStore.getState().start()}
+            >
+              Retry
+            </button>
+          }
+        />
       </div>
     );
   }

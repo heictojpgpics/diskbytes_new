@@ -216,8 +216,8 @@ function AppShell() {
               key={tab}
               className="db-tab-swap"
               initial={{ opacity: 0 }}
-              animate={{ opacity: 1, transition: FADE_SWAP }}
-              exit={{ opacity: 0, transition: EXIT_FAST }}
+              animate={{ opacity: 1, pointerEvents: "auto", transition: FADE_SWAP }}
+              exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_FAST }}
             >
               {tab === "explore" && <ExploreView onPreview={openPreview} />}
               {tab === "duplicates" && <DuplicatesView />}

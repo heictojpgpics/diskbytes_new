@@ -74,10 +74,12 @@ async function ensureStreamListener(
       onBatch(batch);
     });
     streamPending.catch(() => {
-      // Listen failed: drop the memo so a later load can retry, and
-      // release this caller's ref (no detach will be created).
+      // Listen failed: drop the memo so a later load can retry. EVERY
+      // outstanding ref belongs to a caller whose await also rejects
+      // with no detach created — zero the count (the catch microtask
+      // runs before any new caller can enter).
       streamPending = null;
-      streamRefs = Math.max(0, streamRefs - 1);
+      streamRefs = 0;
     });
   }
   const un = await (streamPending ?? Promise.resolve(streamUnlisten!));
@@ -116,7 +118,10 @@ export const useApplicationsStore = create<ApplicationsState>((set, get) => ({
       const apps = await invoke<AppEntry[]>("list_applications", { refresh });
       set({ apps, partial: [], busy: false });
     } catch (e) {
-      set({ apps: null, busy: false, error: String(e) });
+      // partial clears here too: a failed load leaves streamed rows
+      // that would otherwise render as the authoritative caption with
+      // nothing running behind it.
+      set({ apps: null, partial: [], busy: false, error: String(e) });
     } finally {
       detach?.();
     }

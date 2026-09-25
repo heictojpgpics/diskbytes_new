@@ -61,6 +61,11 @@ export const useMonitorStore = create<MonitorStore>((set, get) => ({
     starting = true;
     void (async () => {
       try {
+        // Re-usable (Retry from the error state): detach any listener
+        // a failed earlier attempt left behind — a second one would
+        // double every sample into the ring.
+        unlisten?.();
+        unlisten = null;
         const un = await listen<MonitorSample>("monitor-sample", (s) => {
           set({ ring: [...get().ring.slice(-(MONITOR_RING - 1)), s] });
         });
@@ -69,7 +74,7 @@ export const useMonitorStore = create<MonitorStore>((set, get) => ({
         // started ONLY on success — the error branch must stay reachable
         // (MonitorView renders its error state when error && !started;
         // setting both made the skeleton run forever on failure).
-        set({ started: true });
+        set({ started: true, error: null });
       } catch (e) {
         set({ error: String(e) });
       } finally {

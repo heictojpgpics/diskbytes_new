@@ -35,6 +35,8 @@ export function DuplicatesView() {
   const stageMany = useCleanupStore((s) => s.stageMany);
   const [result, setResult] = useState<DupesResult | null>(null);
   const [streamed, setStreamed] = useState<DupeGroup[]>([]);
+  /** Generation the latest (auto or manual) scan covered. */
+  const [scannedGen, setScannedGen] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keeps, setKeeps] = useState<Map<string, string>>(new Map());
@@ -89,13 +91,16 @@ export function DuplicatesView() {
 
   // Tree-change invalidation: a new scan (sidebar) or a cleanup commit
   // bumps the generation while staying "done" — the old result's groups
-  // are stale (paths may no longer exist). Reset on mismatch, which also
-  // re-arms the auto-scan below.
+  // are stale (paths may no longer exist). Covers the IN-FLIGHT scan too
+  // (busy, result still null — a commit during hashing must kill the
+  // resolve, else a stale-generation result lands and never
+  // invalidates), and un-sticks busy when it kills one.
   useEffect(() => {
-    if (status !== "done" || (result && result.generation !== generation)) {
+    if (status !== "done" || busy || (result && result.generation !== generation)) {
       setResult(null);
       setKeeps(new Map());
       setStreamed([]);
+      setBusy(false);
       scanSeq.current += 1; // cancel any in-flight stream render
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,13 +109,17 @@ export function DuplicatesView() {
   // Auto-scan on entry (scan done, no result yet): the tab opens with
   // results already streaming — no click required. Applications and
   // Monitor both load on entry; Duplicates was the lone wait-for-click
-  // surface.
+  // surface. `scannedGen` latches the generation each run covered, so a
+  // done→done bump (cleanup commit while viewing) re-arms the scan even
+  // though the invalidation effect's reset hasn't flushed yet in this
+  // same commit.
   useEffect(() => {
-    if (status === "done" && !result && !busy && streamed.length === 0) {
+    if (status === "done" && !busy && scannedGen !== generation) {
+      setScannedGen(generation);
       void scan();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, generation]);
+  }, [status, generation, scannedGen, busy]);
 
   const keepAndStageRest = (g: DupeGroup, keepPath: string) => {
     setKeeps((m) => new Map(m).set(keyOf(g), keepPath));
