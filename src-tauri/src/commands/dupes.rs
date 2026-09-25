@@ -337,6 +337,7 @@ fn hardlink_identity(_path: &std::path::Path) -> Option<(u64, u64)> {
 /// pipeline was cancelled, or the blocking thread failed.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // State extraction is the tauri command contract
+#[allow(clippy::print_stderr)] // liveness tracing (doc 07 perf-watchdog pattern)
 pub async fn find_duplicates(
     generation: u64,
     app: AppHandle,
@@ -360,7 +361,6 @@ pub async fn find_duplicates(
     // this run is cancelled iff the shared counter moves off the value
     // it held at start; a cancel pressed before this line counts for
     // THIS run (the UI only cancels while a run is busy).
-    #[allow(clippy::print_stderr)] // liveness tracing (doc 07 perf-watchdog pattern)
     eprintln!("[dupes] start gen={generation} tree_nodes={}", tree.len());
     let t_start = Instant::now();
     let ctl = Arc::new(DupesCtl::live(app, Arc::clone(&state.dupes_cancel)));
@@ -380,17 +380,15 @@ pub async fn find_duplicates(
         }
     });
     let compute_ctl = Arc::clone(&ctl);
+    let started = ctl.started; // Instant is Copy
     let result = tauri::async_runtime::spawn_blocking(move || {
-        #[allow(clippy::print_stderr)]
         eprintln!("[dupes] spawn_blocking task ENTERED");
         let out = compute_dupes(&tree, compute_ctl.as_ref());
-        #[allow(clippy::print_stderr)]
-        eprintln!("[dupes] compute finished at {:?}", ctl.started.elapsed());
+        eprintln!("[dupes] compute finished at {:?}", started.elapsed());
         out
     })
     .await
     .map_err(|e| format!("dupes thread failed: {e}"))?;
-    #[allow(clippy::print_stderr)]
     eprintln!("[dupes] await resolved at {:?}", t_start.elapsed());
     finished.store(true, Ordering::Relaxed);
     // Terminal event: the UI's busy row settles on "done" (or the
@@ -418,6 +416,7 @@ pub fn cancel_duplicates(state: State<'_, AppState>) -> u64 {
 /// # Errors
 /// `Err("cancelled")` when the user cancelled mid-pipeline.
 #[allow(clippy::too_many_lines)] // 3-pass pipeline; the pass structure is the spec
+#[allow(clippy::print_stderr)] // liveness tracing
 fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
     // Pass 0: collect live files. Cloud placeholders NEVER open (R7.3)
     // and Windows-managed (protected) files never hash or stage (§4 —
@@ -439,7 +438,6 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
         }
     });
     let total_files = candidates.len() as u64;
-    #[allow(clippy::print_stderr)]
     eprintln!(
         "[dupes] collected {total_files} candidates at {:?}",
         ctl.started.elapsed()
@@ -483,7 +481,6 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
         return Err("cancelled".into());
     }
 
-    #[allow(clippy::print_stderr)]
     eprintln!(
         "[dupes] prefix pass done: {} targets at {:?}",
         prefix_targets.len(),
@@ -576,6 +573,7 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
 ///
 /// # Errors
 /// `Err("cancelled")` when the user cancelled mid-hash.
+#[allow(clippy::print_stderr)] // liveness tracing
 fn finish_pipeline(
     tree: &Tree,
     ctl: &DupesCtl,
@@ -595,7 +593,6 @@ fn finish_pipeline(
         .map(|&i| candidates[i].size)
         .sum();
     ctl.set_phase(PHASE_FULL, full_files, full_bytes);
-    #[allow(clippy::print_stderr)]
     eprintln!(
         "[dupes] full pass: {} buckets / {} bytes",
         survivors.len(),
