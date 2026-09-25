@@ -321,15 +321,32 @@ fn permission_denied_dir_is_survivable() {
 fn windows_reserved_shape_names_kept_byte_exact() {
     // Names that LOOK reserved/odd but are legal on modern NTFS via
     // \\?\ paths; on other hosts they're plain names. The core must
-    // store whatever the OS produced, byte-exact.
+    // store whatever the OS produced, byte-exact. "Whatever the OS
+    // produced" is measured, not assumed: the Win32 layer (without
+    // the \\?\ prefix) silently strips trailing dots/spaces, so a
+    // write of "trailing.dot." lands on disk as "trailing.dot" —
+    // asserting the PRE-strip name failed on every real Windows run.
+    // read_dir reports the actual stored name; THAT is the contract.
     let dir = stage("names");
     for n in ["CON.shaped.txt", "aux.like.bin", "trailing.dot."] {
         if std::fs::write(dir.join(n), b"x").is_ok() {
+            // The name the OS actually kept (Win32 strips trailing
+            // dots; unix keeps everything).
+            let actual: Vec<String> = std::fs::read_dir(&dir)
+                .expect("read staged dir")
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            let produced = actual
+                .iter()
+                .find(|a| a.trim_end_matches(['.', ' ']) == n.trim_end_matches(['.', ' ']))
+                .cloned()
+                .unwrap_or_else(|| n.to_string());
             let t = build_from_fs(&dir);
-            let units: Vec<u16> = n.encode_utf16().collect();
+            let units: Vec<u16> = produced.encode_utf16().collect();
             assert!(
                 (0..t.len() as u32).any(|id| t.name_u16(id) == units.as_slice()),
-                "odd name {n:?} lost"
+                "odd name {produced:?} (asked for {n:?}) lost"
             );
         }
     }
