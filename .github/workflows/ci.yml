@@ -51,6 +51,33 @@ jobs:
         working-directory: src-tauri
         shell: bash
 
+      # Diagnostic (session-4): the debug lib-test exe intermittently fails
+      # to LOAD (STATUS_ENTRYPOINT_NOT_FOUND) while the release app runs.
+      # When that happens, dump the exe's import table so the missing
+      # entry point is identifiable from the logs instead of guesswork.
+      - name: "Diag: dump test-exe imports (on test failure)"
+        if: failure()
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse target\debug\deps -Filter "diskbytes_lib-*.exe" | Select-Object -First 1
+          if (-not $exe) { "no test exe found"; exit 0 }
+          "exe: $($exe.FullName)"
+          $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -find "VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin) { "dumpbin not found"; exit 0 }
+          "--- dependents ---"
+          & $dumpbin /dependents $exe.FullName | Select-Object -First 60
+          "--- imports (dll: entry summary) ---"
+          $out = & $dumpbin /imports $exe.FullName
+          $out | Select-Object -First 400
+          "--- PATH dll shadowing check ---"
+          $deps = & $dumpbin /dependents $exe.FullName | Where-Object { $_ -match '\.dll$' } | ForEach-Object { $_.Trim() }
+          foreach ($d in $deps) {
+            $hits = Get-Command $d -ErrorAction SilentlyContinue
+            if ($hits) { "  $d -> $($hits.Source)" }
+          }
+
       - name: "Gate: 1M-node bench (M2: < 2 s)"
         run: cargo test --release -p diskbytes-core -- --ignored bench_1m --nocapture
         working-directory: src-tauri
