@@ -936,3 +936,19 @@ Work Log:
 
 Stage Summary:
 - a911b33 pushed; both failing workflows share the single fixed root cause
+---
+Task ID: uiux-8 (final)
+Agent: main
+Task: CI green confirmation + production-build verification of all Session-3 fixes
+
+Work Log:
+- All 4 workflows GREEN on 1161831: CI (Windows gates + NSIS bundle), macOS Build, UI Screenshots, Test Matrix
+- Pulled the 34 production screenshots from the Windows runner and VLM + pixel-verified every user-reported bug against the REAL build (not the mock):
+  1. Post-scan tab layout: Applications/Monitor/Duplicates/Snapshots content spans 100% of the main column (y 70..1058, 20-42% fill in every band) — the 70/30 bottom-squeeze is gone (broken state had content starting y≈840); VLM "still squeezed" claims on Duplicates/Snapshots were disproven by pixels — both render intended empty-states with CTAs
+  2. Folders/Files heading symmetry: FOLDERS(5) at x=537, FILES(2) at x=537 — exactly aligned (measured at the compact-width window the CI uses; the toolbar wraps to 2 rows there, which initially confused the measurement)
+  3. Flame mode: 8 rows × 79px filling y 277..907 exactly to the legend row, root title band present, deep narrow stacks render (x 871..885) — correct flame-graph shape; VLM's "bottom dead zone" was a misread of sparse-but-correct lower rows on the imbalanced synthetic tree (real disks have sizeable deep branches)
+- Flame judgment call: rows allocated by reachable depth are SAFE (never overflow); switching to rendered-depth counting risks undercount → cell overflow. No change.
+
+Stage Summary:
+- Session 3 complete: streaming reverted, dupes parallel+screened, applications boot-preloaded, layout/transition/alignment/overflow/admin-icon all fixed and now verified in the production Windows build
+- Final state: HEAD all-green, deliverable = the repo itself (installer artifact in CI)
