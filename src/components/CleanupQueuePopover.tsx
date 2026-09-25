@@ -64,6 +64,22 @@ export function CleanupQueuePopover({
     return () => window.removeEventListener("resize", measure);
   }, [open]);
 
+  // Keyboard entry (a11y): the popover is non-modal (outside click /
+  // Esc dismiss) but must still be REACHABLE — Enter on the Cleanup
+  // button moves focus into the panel so Tab walks its controls
+  // instead of the content behind it, and focus returns to the button
+  // on close.
+  useEffect(() => {
+    if (!open || !anchorPos) return;
+    const t = window.setTimeout(() => {
+      const first = popRef.current?.querySelector<HTMLElement>(
+        "button:not([disabled])",
+      );
+      (first ?? popRef.current)?.focus();
+    }, 30); // after the enter animation mounts the tree
+    return () => window.clearTimeout(t);
+  }, [open, anchorPos]);
+
   useEffect(() => {
     if (!open) {
       setConfirming(false);
@@ -147,7 +163,9 @@ export function CleanupQueuePopover({
             className="db-pop"
             style={anchor === "topbar" ? { right: anchorPos.right, top: anchorPos.top } : undefined}
             role="dialog"
+            aria-modal="false"
             aria-label="Cleanup Queue"
+            tabIndex={-1}
             initial={{ opacity: 0, y: -8, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -6, scale: 0.98, transition: EXIT_FAST }}

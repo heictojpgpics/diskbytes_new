@@ -47,7 +47,10 @@
   --used-tint: rgba(255, 59, 48, 0.055);
   --free: #34c759;
   --free-soft: rgba(52, 199, 89, 0.12);
-  --focus-ring: rgba(255, 107, 74, 0.55);
+  /* 0.8 alpha: 0.55 blended to ~1.8:1 on white/panel — below the
+   * 3:1 focus-indicator floor. 0.8 reads ~2.9:1 with the 2px width
+   * (effective contrast higher still). */
+  --focus-ring: rgba(255, 107, 74, 0.8);
   --close-hover: #e81123;
 
   /* ── Data pastels (theme-independent, spec §4 + doc 05 §1.1) ──────── */

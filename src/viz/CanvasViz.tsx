@@ -10,7 +10,7 @@ import { useArrowNav } from "../lib/useArrowNav";
 import { bytes } from "../lib/format";
 import { abbreviate } from "./abbrev";
 import {
-  CELL_KIND, DIR_BIT, cssRgba, cssRgbaTheme, getLayout, getNames, type Cell, type GroupDesc, type LayoutResult,
+  CELL_KIND, DIR_BIT, cssRgbaTheme, getLayout, getNames, type Cell, type GroupDesc, type LayoutResult,
 } from "./layoutIpc";
 
 /** Synthetic regroup ids (by-type/by-age group cells) live at/above this
@@ -279,12 +279,19 @@ export function CanvasViz(props: CanvasVizProps) {
         ctx.lineWidth = 1;
         ringPath(ctx, sel, layout, mode, 3);
       }
-      // hover ring (overlay canvas only — never React state)
+      // hover ring (overlay canvas only — never React state): the
+      // selection's double-ring language at a neutral tone — white
+      // outer + ink inner reads on BOTH themes (the old single
+      // near-black ring vanished against the dark canvas background
+      // and was confusable with cell hairlines at 1× zoom).
       const hv = hoverCell.current;
       if (hv && hv !== sel) {
-        ctx.strokeStyle = `rgba(29,29,31,${0.85 * ringAlpha})`;
-        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = `rgba(255,255,255,${0.9 * ringAlpha})`;
+        ctx.lineWidth = 2;
         ringPath(ctx, hv, layout, mode);
+        ctx.strokeStyle = `rgba(29,29,31,${0.75 * ringAlpha})`;
+        ctx.lineWidth = 1;
+        ringPath(ctx, hv, layout, mode, 1.5);
       }
     },
     [layout, size, props.selectedId, cellsById, mode],
@@ -419,7 +426,10 @@ export function CanvasViz(props: CanvasVizProps) {
         <div className="db-viz-groups">
           {layout?.meta.groups.slice(0, 6).map((g) => (
             <span key={g.id}>
-              <i style={{ background: cssRgba((g.color << 8) | 0xff) }} />
+              {/* Theme-matched chip: the canvas cells saturate in dark
+               * mode (cssRgbaTheme); the chips used the raw pastel and
+               * read washed-out next to them. */}
+              <i style={{ background: cssRgbaTheme((g.color << 8) | 0xff, document.documentElement.getAttribute("data-theme") === "dark") }} />
               {g.name}
             </span>
           ))}
@@ -603,24 +613,40 @@ function drawCells(
     r: number;
     draw: () => void;
   }[] = [];
+  // Deferred bubble rims (two-pass rendering — see CIRCLE branch).
+  const circleRims: number[] = [];
 
   // mind-map: draw links first — each takes the CHILD's own family color
   // at ~45% opacity (reference: colored bezier links, not uniform gray).
   if (mode === "mind-map") {
     for (const c of layout.cells) {
       if ((c.flags & 0b111) !== CELL_KIND.DOT) continue;
-      const [x, y, , px, py] = c.g;
+      const [x, y, r, px, py] = c.g;
       const lr = (c.rgba >>> 24) & 0xff;
       const lg = (c.rgba >>> 16) & 0xff;
       const lb = (c.rgba >>> 8) & 0xff;
-      ctx.strokeStyle = `rgba(${lr},${lg},${lb},0.45)`;
-      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = `rgba(${lr},${lg},${lb},0.55)`;
+      // Weight ∝ child dot radius (structure reads at a glance), and
+      // links TERMINATE at the dot edges instead of passing through
+      // the bodies (trimmed along the parent→child direction).
+      ctx.lineWidth = Math.min(3.5, Math.max(0.8, 0.8 + r / 10));
+      const dx = x - px;
+      const dy = y - py;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      const hub = c.id === layout.meta.node ? 0 : 0;
+      const startX = px + ux * 0; // parent trim handled by its own link
+      const startY = py + uy * 0;
+      const endX = x - ux * (r + 1.5);
+      const endY = y - uy * (r + 1.5);
       ctx.beginPath();
       const mx = (x + px) / 2 + (y - py) * 0.12;
       const my = (y + py) / 2 - (x - px) * 0.12;
-      ctx.moveTo(px, py);
-      ctx.quadraticCurveTo(mx, my, x, y);
+      ctx.moveTo(startX, startY);
+      ctx.quadraticCurveTo(mx, my, endX, endY);
       ctx.stroke();
+      void hub;
     }
   }
   // sunburst: subtle ring separators — ONE circle per DISTINCT ring
@@ -731,18 +757,23 @@ function drawCells(
           const fontPx = big ? 12.5 : mid ? 11 : 10;
           const weight = big ? 700 : 600;
           ctx.font = `${weight} ${fontPx}px ${fontUi}`;
-          ctx.textBaseline = "top";
+          // Two-line labels (big cells) anchor top; the SINGLE-line tier
+          // (no size row will draw) centers vertically — a lone 10px
+          // label hugging the top of an otherwise-empty short cell read
+          // as floaty misalignment.
+          const twoLine = big && rh >= 64 && c.size > 0;
+          ctx.textBaseline = twoLine ? "top" : "middle";
           haloText(
             ctx,
             clipLabel(ctx, label, rw - 10),
             x + 5,
-            y + 4,
+            twoLine ? y + 4 : y + rh / 2 + 0.5,
             ON_PASTEL,
           );
           // Second line — the reference's two-line "name / size" labels
           // on big cells (size arrives via the frame's u64 sizes tail;
           // "600 9px" was dead styling before the tail existed).
-          if (big && rh >= 64 && c.size > 0) {
+          if (twoLine) {
             ctx.font = `600 ${Math.max(9.5, fontPx - 2.5)}px ${fontUi}`;
             haloText(ctx, bytes(c.size), x + 5, y + 6 + fontPx, ON_PASTEL_2);
           }
@@ -777,26 +808,39 @@ function drawCells(
         ctx.font = `600 9px ${fontUi}`;
         ctx.textBaseline = "middle";
         const cosMid = Math.cos(midA);
-        if (span * (r0 + 5) > 11 && ringW >= 24) {
+        // Noise gate: a clipped label of ≤3 chars ("P…", "fi…") carries
+        // no information — drop it rather than texture the ring.
+        const fit = (budget: number) => {
+          const t = clipLabel(ctx, label, budget);
+          return t.length > 3 ? t : null;
+        };
+        if (span * (r0 + 5) > 30 && ringW >= 24) {
           // Radial spoke: from the inner edge outward, left half flips
-          // so the text always reads left-to-right.
-          const flip = cosMid < 0;
-          ctx.save();
-          ctx.translate(cx + cosMid * (r0 + 5), cy + Math.sin(midA) * (r0 + 5));
-          ctx.rotate(midA + (flip ? Math.PI : 0));
-          ctx.textAlign = flip ? "right" : "left";
-          ctx.fillText(clipLabel(ctx, label, ringW - 10), flip ? -2 : 2, 0);
-          ctx.textAlign = "left";
-          ctx.restore();
+          // so the text always reads left-to-right. (Chord gate 30px
+          // ≈ 4 chars — the old 11px gate admitted 1–2 char fragments.)
+          const t = fit(ringW - 10);
+          if (t) {
+            const flip = cosMid < 0;
+            ctx.save();
+            ctx.translate(cx + cosMid * (r0 + 5), cy + Math.sin(midA) * (r0 + 5));
+            ctx.rotate(midA + (flip ? Math.PI : 0));
+            ctx.textAlign = flip ? "right" : "left";
+            haloText(ctx, t, flip ? -2 : 2, 0, ON_PASTEL);
+            ctx.textAlign = "left";
+            ctx.restore();
+          }
         } else if (span * rrMid - 6 >= 28 && ringW > 13) {
           // Tangential: text along the chord direction at mid-radius;
           // flip when the chord runs right-to-left (bottom half).
-          const flip = Math.sin(midA) > 0;
-          ctx.save();
-          ctx.translate(cx + cosMid * rrMid, cy + Math.sin(midA) * rrMid);
-          ctx.rotate(midA + Math.PI / 2 + (flip ? Math.PI : 0));
-          ctx.fillText(clipLabel(ctx, label, span * rrMid - 6), flip ? -2 : 2, 0);
-          ctx.restore();
+          const t = fit(span * rrMid - 6);
+          if (t) {
+            const flip = Math.sin(midA) > 0;
+            ctx.save();
+            ctx.translate(cx + cosMid * rrMid, cy + Math.sin(midA) * rrMid);
+            ctx.rotate(midA + Math.PI / 2 + (flip ? Math.PI : 0));
+            haloText(ctx, t, flip ? -2 : 2, 0, ON_PASTEL);
+            ctx.restore();
+          }
         }
       }
     } else if (kind === CELL_KIND.CIRCLE) {
@@ -805,9 +849,10 @@ function drawCells(
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = "rgba(29,29,31,0.16)";
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
+      // Rim DEFERRED: fill+stroke in one pass let every child fill
+      // overpaint its parent's rim (dense centers read as borderless
+      // mush). Rims collect here and stroke after the whole cell loop.
+      circleRims.push(x, y, r);
       // The sunburst center disc carries the dedicated white center
       // label below — skip the generic dark-ink circle label for it.
       const isSunburstCenter = mode === "sunburst" && c.id === layout.meta.node;
@@ -956,6 +1001,63 @@ function drawCells(
           ctx.textAlign = "left";
         }
       }
+    }
+  }
+
+  // ── Deferred bubble rims (two-pass): all fills done, now the strokes —
+  // parent rims survive under nothing. Drawn parent-last (cells iterate
+  // parent→child) so big rims sit beneath any later sibling fill is
+  // impossible; strokes order among themselves is invisible.
+  if (circleRims.length) {
+    ctx.strokeStyle = "rgba(29,29,31,0.16)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let i = 0; i < circleRims.length; i += 3) {
+      ctx.moveTo(circleRims[i] + circleRims[i + 2], circleRims[i + 1]);
+      ctx.arc(circleRims[i], circleRims[i + 1], circleRims[i + 2], 0, Math.PI * 2);
+    }
+    ctx.stroke();
+  }
+
+  // ── Flame depth hairlines: rows are flush (y = (depth-1)*row_h); the
+  // per-block 0.10-alpha strokes separate blocks but not ROWS — full
+  // width bg-colored 1px rules at each distinct row top make the depth
+  // ladder read at a glance. (Distinct RECT tops, skip y=0.)
+  if (mode === "flame") {
+    const rowTops = new Set<number>();
+    for (const c of layout.cells) {
+      if ((c.flags & 0b111) !== CELL_KIND.RECT) continue;
+      const y = c.g[1];
+      if (y > 0.5) rowTops.add(y);
+    }
+    if (rowTops.size) {
+      ctx.strokeStyle = bg;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const y of rowTops) {
+        ctx.moveTo(0, Math.round(y) + 0.5);
+        ctx.lineTo(w, Math.round(y) + 0.5);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // ── Mind-map hub emphasis: the root dot renders in cell order like
+  // any branch — buried. Redraw LAST with a white+ink double ring so
+  // the anchor of the map reads instantly.
+  if (mode === "mind-map") {
+    for (const c of layout.cells) {
+      if (c.id !== layout.meta.node) continue;
+      if ((c.flags & 0b111) !== CELL_KIND.DOT) continue;
+      const [x, y, r] = c.g;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(29,29,31,0.85)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      break;
     }
   }
 

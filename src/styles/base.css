@@ -51,7 +51,11 @@ a:focus-visible,
 [tabindex]:focus-visible {
   outline: var(--focus-w) solid var(--focus-ring);
   outline-offset: var(--focus-offset);
-  border-radius: var(--radius-xs);
+  /* NO border-radius here: a global radius override morphs every
+   * component's own shape while focused (10px outline buttons snapped
+   * to 6px, pill chips to squares, round remove-buttons to
+   * squircles). Each element already carries its radius; the outline
+   * follows it. */
 }
 
 button:focus:not(:focus-visible),

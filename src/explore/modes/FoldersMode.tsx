@@ -228,9 +228,14 @@ export function FoldersMode(props: FoldersModeProps) {
           </div>
         )}
         {data.files.length === 0 ? (
-          <div className="db-substate inline">
-            {props.filter ? `No files match “${props.filter}”.` : "No files in this folder."}
-          </div>
+          /* Shown only when folders DID match — the folders section
+           * already announced the unmatched filter; stacking both
+           * notices repeated one condition twice. */
+          data.folders.length > 0 ? (
+            <div className="db-substate inline">
+              {props.filter ? `No files match “${props.filter}”.` : "No files in this folder."}
+            </div>
+          ) : null
         ) : (
           <div className="db-files-grid">
             {data.files.map((f) => {

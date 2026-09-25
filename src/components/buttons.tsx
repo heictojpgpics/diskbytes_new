@@ -105,7 +105,9 @@ export function EmptyState({
   return (
     <div className="db-empty">
       <span className="db-empty-icon">{icon}</span>
-      <h1>{title}</h1>
+      {/* h2, not h1: the tab head above already owns the page's h1 —
+       * two h1s per view wrecked the heading outline. */}
+      <h2>{title}</h2>
       <p>{body}</p>
       {action}
     </div>

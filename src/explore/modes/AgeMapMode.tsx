@@ -173,7 +173,8 @@ export function AgeMapMode(props: AgeMapModeProps) {
           data.big.slice(0, 50).map((row) => {
             const staged = contains(row.id);
             return (
-              <div
+              <button
+                type="button"
                 className="db-big-row"
                 key={row.id}
                 onPointerEnter={(e) => props.onHover(row.id, e.clientX, e.clientY)}
@@ -183,6 +184,7 @@ export function AgeMapMode(props: AgeMapModeProps) {
                   props.onContextMenu(row.id, e.clientX, e.clientY);
                 }}
                 onClick={() => props.onSelect(row.id)}
+                aria-label={`${row.name}, ${bytes(row.logical)}, ${relativeAge(row.modified, now)}`}
               >
                 <FileIcon size={15} />
                 <span>
@@ -207,7 +209,7 @@ export function AgeMapMode(props: AgeMapModeProps) {
                   {relativeAge(row.modified, now)}
                 </em>
                 <b className="tnum">{bytes(row.logical)}</b>
-              </div>
+              </button>
             );
           })
         )}

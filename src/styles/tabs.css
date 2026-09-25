@@ -25,7 +25,7 @@
   color: var(--ink);
   box-shadow: var(--shadow-1);
 }
-.db-empty h1 {
+.db-empty h2 {
   margin: 4px 0 0;
   font-size: 19px;
   font-weight: 720;

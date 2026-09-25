@@ -826,3 +826,34 @@ Work Log:
 Stage Summary:
 - Gates: tsc 0, vitest 54/54, build OK, core 196 tests, fmt clean
 - Next: commit + push + CI monitor to green, review pass 2
+
+---
+Task ID: uiux-3
+Agent: main (Super Z)
+Task: Second horizon — review round 2 + a11y batch + viz refinement top-10
+
+Work Log:
+- Review round 2 (agent) found 3 P1 + 3 P2: ALL FIXED
+  * pointer-events attr stick (A→B→A re-entry) → moved to exit/animate variants (framer never removes the pop attr)
+  * dupes in-flight invalidation gap (commit during hashing landed stale results; busy stuck) → effect covers busy + un-sticks
+  * monitor boot failure bricked tab (no retry) → Retry action + reusable start()
+  * applications catch clears partial; streamRefs=0 on rejection; scannedGen latch re-arms auto-scan on done→done bumps
+- Interaction audit (agent, live-verified): 2 P1 + 6 P2 FIXED
+  * CleanupQueuePopover keyboard-unreachable → focus-on-open + aria-modal=false + tabIndex
+  * AgeMap rows div→button (only keyboard-dead mode) + full button reset CSS
+  * focus-radius global override removed (was morphing every component shape while focused); light --focus-ring 0.55→0.8 alpha (<3:1)
+  * EmptyState h1→h2 (heading outline), monitor filter no-match row, folders stacked empty notices collapsed
+- Viz refinement top-10 (CanvasViz.tsx, all live-verified + VLM PASS):
+  * hover ring: theme-aware double-ring (white outer + ink inner — old near-black ring vanished on dark bg)
+  * sunburst: chord gate 11→30px, ≤3-char noise labels dropped, haloText on arcs
+  * treemap: single-line labels vertically centered in short cells
+  * flame: full-width depth-row hairlines
+  * bubbles: two-pass rendering (fills then rims — rims survive children)
+  * mind map: hub redrawn last with white+ink rings; links terminate at dot edges, width ∝ child radius
+  * legend chips: cssRgbaTheme (dark chips match saturated canvas)
+- VLM final rounds: dark 5/5 + light 4/4 + refined 4/4 PASS; treemap HEADERs + ListMode Items column verified intact post-merge
+- Crossfade re-verified post-fix: 0 blank frames (76-frame video), rapid A→B→A click-dead regression test passed (real mouse click)
+
+Stage Summary:
+- Gates: tsc 0, vitest 54/54, build OK; commit ready
+- CI was green on 0ff896b (all 4 workflows); this batch (8540877+) pending

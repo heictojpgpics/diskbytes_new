@@ -232,6 +232,9 @@ export function MonitorView() {
             <b className="tnum">{bytes(p.ws)}</b>
           </div>
         ))}
+        {shown.length === 0 && (
+          <div className="db-substate">No processes match “{filter}”.</div>
+        )}
         {procsSorted.length > 14 && !showAll && (
           <button type="button" className="db-vol-more" style={{ marginTop: 6 }} onClick={() => setShowAll(true)}>
             Show all {procsSorted.length.toLocaleString()}
