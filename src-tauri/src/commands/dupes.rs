@@ -195,7 +195,9 @@ fn compute_dupes(tree: &diskbytes_core::scan::node::Tree) -> DupesResult {
     // streaming path needed is gone, and `rank` re-sorts globally
     // anyway. Files ≤ PREFIX long already have their full digest from
     // pass 2 — reused verbatim, zero re-reads.
-    let survivors: Vec<((u64, [u8; 32]), Vec<usize>)> = by_prefix
+    // (Spelled-out tuple trips clippy::type_complexity — CI denies it.)
+    type PrefixBucket = ((u64, [u8; 32]), Vec<usize>);
+    let survivors: Vec<PrefixBucket> = by_prefix
         .into_iter()
         .filter(|(_, g)| g.len() >= 2)
         .collect();
