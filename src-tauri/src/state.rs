@@ -67,6 +67,12 @@ pub struct AppState {
     /// lost-event reconcile path; written by the scan thread before
     /// the `scan-done` emit, read by `get_status`).
     pub last_done: Mutex<DoneRecord>,
+    /// Duplicates-run cancel generation (see `commands::dupes`):
+    /// `cancel_duplicates` bumps it; a run latches the value at start
+    /// and reports cancelled once the counter moves. Shared as an
+    /// `Arc` so the blocking pipeline can read it without borrowing
+    /// the state.
+    pub dupes_cancel: Arc<AtomicU64>,
 }
 
 impl AppState {
@@ -80,6 +86,7 @@ impl AppState {
             scanning: AtomicU64::new(0),
             progress: Arc::new(Mutex::new(Progress::default())),
             last_done: Mutex::new(DoneRecord::default()),
+            dupes_cancel: Arc::new(AtomicU64::new(0)),
         }
     }
 

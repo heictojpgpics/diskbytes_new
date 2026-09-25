@@ -45,6 +45,19 @@ pub fn mindmap(
     let total = n.on_disk;
     let cx = width / 2.0;
     let cy = height / 2.0;
+    // ADAPTIVE ring budget: `rings` = the levels that actually SPREAD
+    // (a level with ≥ 2 sizeable children consumes one ring; a
+    // single-child chain level consumes a LEVEL but no ring — its dot
+    // collapses onto the parent's position). A depth-7 request over a
+    // 3-level tree used to divide r_max by 7 and fill only the inner
+    // ~40% of the canvas (the "tiny, off-center mind map" finding);
+    // counting CHAIN levels as ring consumers had the same effect.
+    // The depth setting stays the hard descent ceiling.
+    let rings = if depth == 0 {
+        0
+    } else {
+        spread_rings(tree, node, depth)
+    };
     // Reserve the largest possible dot + air so dots and their labels
     // never clip the canvas edge (the deepest ring sits AT r_max; with
     // only a 6 px margin, 20-26 px dots at the 12-o'clock start angle
@@ -80,6 +93,7 @@ pub fn mindmap(
             r_max,
             1,
             depth,
+            rings,
             total as f32,
             -std::f32::consts::FRAC_PI_2,
             -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU,
@@ -91,6 +105,37 @@ pub fn mindmap(
             branch_root,
             branch_level,
         );
+    }
+    // Scale-to-fit (session-4 fill fix): the ring budget can under-
+    // fill the canvas when the deepest spreading levels hold micro-dots
+    // that cull away — the VISIBLE mass then hugs the center (the
+    // "tiny, off-center mind map" finding). Measure the emitted dots'
+    // extent from the root and uniformly scale POSITIONS (dot radii
+    // stay size-proportional; parent links ride the same transform)
+    // so the visible extent exactly reaches r_max. Clamped: a 0.5
+    // floor keeps odd geometries from collapsing onto the hub, a 3.0
+    // ceiling keeps a few specks from exploding across the canvas.
+    if cells.len() > 1 {
+        let reach = cells
+            .iter()
+            .filter(|c| c.id != node && (c.flags & 0b111) == crate::layout::cell_kind::DOT)
+            .map(|c| ((c.g[0] - cx).powi(2) + (c.g[1] - cy).powi(2)).sqrt() + c.g[2])
+            .fold(0.0_f32, f32::max);
+        if reach > f32::EPSILON {
+            let scale = (r_max / reach).clamp(0.5, 3.0);
+            for c in &mut cells {
+                if (c.flags & 0b111) == crate::layout::cell_kind::DOT {
+                    if c.id != node {
+                        c.g[0] = cx + (c.g[0] - cx) * scale;
+                        c.g[1] = cy + (c.g[1] - cy) * scale;
+                    }
+                    // The root's own link is the center — scale-
+                    // invariant; every other link is a position.
+                    c.g[3] = cx + (c.g[3] - cx) * scale;
+                    c.g[4] = cy + (c.g[4] - cy) * scale;
+                }
+            }
+        }
     }
     Ok(LayoutBuffer {
         cells,
@@ -111,15 +156,70 @@ pub fn mindmap(
     })
 }
 
+/// Rings the map will actually SPREAD over below `node`, with
+/// `limit` levels available: a level with exactly one sizeable child
+/// consumes a level but NO ring (the chain collapses onto the parent
+/// position — see `layout_branches`); a level with ≥ 2 sizeable
+/// children consumes a level AND a ring (its children spread onto it).
+/// Descent mirrors the emission's guards (dirs with children only),
+/// so the budget the top call divides by matches the rings actually
+/// drawn.
+fn spread_rings(tree: &Tree, node: u32, limit: u32) -> u32 {
+    let sizeable: Vec<u32> = tree
+        .children_sorted(node)
+        .iter()
+        .copied()
+        .filter(|&id| tree.node(id).is_some_and(|c| c.on_disk > 0))
+        .collect();
+    match sizeable.len() {
+        0 => 0,
+        1 => {
+            // Chain level: no ring; the child inherits the budget.
+            let only = sizeable[0];
+            let descend = tree
+                .node(only)
+                .is_some_and(|c| c.is_dir() && c.child_count > 0);
+            if descend && limit > 0 {
+                spread_rings(tree, only, limit - 1)
+            } else {
+                0
+            }
+        }
+        _ => {
+            if limit == 0 {
+                return 0;
+            }
+            1 + sizeable
+                .iter()
+                .filter(|&&id| {
+                    tree.node(id)
+                        .is_some_and(|c| c.is_dir() && c.child_count > 0)
+                })
+                .map(|&id| spread_rings(tree, id, limit - 1))
+                .max()
+                .unwrap_or(0)
+        }
+    }
+}
+
 /// Place the children of `node` on the ring at radius `ring_r`, within
 /// the inherited angular sector `[a0, a1)` — spans ∝ weights, and every
 /// descendant stays inside its ancestor's wedge (children used to start
 /// at 12 o'clock regardless of the parent's direction, letting deep
 /// dots cross back over the root hub). `top_index` is the inherited
 /// by-folder family; `branch_root`'s children re-assign it. Dot radii ∝
-/// sqrt(share of the ROOT total) — share-of-parent let a 99 %-of-parent
+/// sqrt(share of the ROOT total) — share-of-parent let a 99%-of-parent
 /// child of a small branch render 4× its parent's size, floating over
 /// the root hub (dwarfed hierarchy inversions).
+///
+/// Ring accounting (the session-4 fill fix): `rings_left` counts the
+/// SPREADING levels this subtree still owns; `depth_left` is the hard
+/// level ceiling. A branched level consumes one ring (its children
+/// sit at `level_r = ring_r - step_r × (rings_left - 1)`, reserving
+/// outer rings for descendants); a single-child chain level consumes
+/// no ring and passes the budget through — chain dots collapse onto
+/// the parent's position. Invariant: a call whose children branch
+/// always holds `rings_left ≥ 1`, so `level_r` is well-defined there.
 #[allow(clippy::too_many_arguments)]
 fn layout_branches(
     tree: &Tree,
@@ -129,6 +229,7 @@ fn layout_branches(
     ring_r: f32,
     depth_here: u32,
     depth_left: u32,
+    rings_left: u32,
     root_total: f32,
     a0: f32,
     a1: f32,
@@ -140,7 +241,7 @@ fn layout_branches(
     branch_root: u32,
     branch_level: u32,
 ) {
-    if depth_left == 0 || ring_r <= 4.0 {
+    if depth_left == 0 {
         return;
     }
     let children = tree.children_sorted(node);
@@ -162,8 +263,9 @@ fn layout_branches(
         .filter(|&&id| tree.node(id).map_or(0, |c| c.on_disk) > 0)
         .count();
     let collapsed = sizeable == 1;
-    let step_r = ring_r / depth_left as f32; // per-level radius step
-    let level_r = ring_r - step_r * (depth_left as f32 - 1.0);
+    let rings = rings_left.max(1);
+    let step_r = ring_r / rings as f32; // per-spreading-level radius step
+    let level_r = ring_r - step_r * (rings as f32 - 1.0);
     let mut cursor = a0; // start at the sector's leading edge
     for (i, &id) in children.iter().enumerate() {
         if crate::layout::over_budget(cells, truncated) {
@@ -187,9 +289,10 @@ fn layout_branches(
         };
         // Dot radius: see the signature note — share of the ROOT keeps
         // every dot's area comparable across the map and monotone down
-        // every chain. The cap scales with the ring step (≈ r_max/depth)
-        // so small canvases don't blob adjacent levels together; ring-1
-        // dots also clear the root hub (largest child vs hub overlap).
+        // every chain. The cap scales with the ring step (≈
+        // r_max/rings) so small canvases don't blob adjacent levels
+        // together; ring-1 dots also clear the root hub (largest child
+        // vs hub overlap).
         let mut cap = (step_r * 0.8).clamp(10.0, DOT_BASE);
         if depth_here == 1 {
             cap = cap.min((level_r - ROOT_DOT_R - 2.0).max(6.0));
@@ -230,16 +333,22 @@ fn layout_branches(
                 x,
                 y,
                 // The child's annulus is the OUTER remainder of ours —
-                // this level consumed `step_r`. Passing `step_r` (the
+                // this level consumed `step_r` (branched) or nothing
+                // (collapsed chain). Passing `step_r` for chains (the
                 // pre-fix bug) shrank each level geometrically
                 // (r_max/depth → /(depth-1) → …), collapsing the whole
                 // map into a concentric blob around the root and
-                // cutting every level past ~4 via the `ring_r <= 4`
-                // guard at the default depth 7. A collapsed chain node
-                // consumed no ring, so it passes the budget through.
+                // cutting every level past ~4 at the default depth 7.
                 if collapsed { ring_r } else { ring_r - step_r },
                 depth_here + 1,
                 depth_left - 1,
+                // Rings decrement ONLY when this level actually spread;
+                // chains pass the budget through.
+                if collapsed {
+                    rings_left
+                } else {
+                    rings_left.saturating_sub(1)
+                },
                 root_total,
                 cursor,
                 cursor + span,
@@ -525,6 +634,56 @@ mod tests {
                 "dot at depth {} crosses the root hub (center-dist {:.1}, r {:.1})",
                 c.depth,
                 from_center,
+                c.g[2]
+            );
+        }
+    }
+
+    #[test]
+    fn shallow_tree_fills_the_full_radius_at_default_depth() {
+        // Regression (the "tiny, off-center mind map" finding): the
+        // ring budget used to divide r_max by the REQUESTED depth (7),
+        // so a 3-level tree filled only the inner ~40% of the canvas.
+        // Now rings = reachable levels: the deepest dots must reach
+        // ≥ 80% of r_max, and no dot may clip the bounds.
+        let t = build_single_drive();
+        let w = 900.0f32;
+        let h = 700.0f32;
+        let req_depth = 7u32;
+        let buf = mindmap(&t, 0, w, h, req_depth, ColorMode::ByFolder, 1).unwrap();
+        let r_max = (w.min(h) / 2.0 - DOT_BASE - 8.0).max(48.0);
+        let (cx, cy) = (w / 2.0, h / 2.0);
+        let dots: Vec<&Cell> = buf
+            .cells
+            .iter()
+            .filter(|c| (c.flags & 0b111) == crate::layout::cell_kind::DOT)
+            .collect();
+        assert!(dots.len() > 4, "tree must emit dots");
+        // Deepest level emitted = 3 (This PC → C: → branches → files).
+        let deepest = dots.iter().map(|c| c.depth).max().unwrap();
+        assert_eq!(deepest, 3, "single-drive tree is 3 levels deep");
+        let reach = dots
+            .iter()
+            .map(|c| ((c.g[0] - cx).powi(2) + (c.g[1] - cy).powi(2)).sqrt() + c.g[2])
+            .fold(0.0_f32, f32::max);
+        assert!(
+            reach >= r_max * 0.8,
+            "shallow map must span the canvas (reach={reach:.1}, r_max={r_max:.1})"
+        );
+        // And still inside the bounds (the edge reserve holds).
+        for c in &dots {
+            assert!(
+                c.g[0] - c.g[2] >= -0.5 && c.g[1] - c.g[2] >= -0.5,
+                "dot clips top-left: ({:.1},{:.1}) r={:.1}",
+                c.g[0],
+                c.g[1],
+                c.g[2]
+            );
+            assert!(
+                c.g[0] + c.g[2] <= w + 0.5 && c.g[1] + c.g[2] <= h + 0.5,
+                "dot clips bottom-right: ({:.1},{:.1}) r={:.1}",
+                c.g[0],
+                c.g[1],
                 c.g[2]
             );
         }

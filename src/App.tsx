@@ -32,7 +32,7 @@ import { pushRecent } from "./sidebar/RecentSection";
 import { TourDriver } from "./shell/TourDriver";
 import { AppErrorBoundary } from "./shell/AppErrorBoundary";
 import { CheckIcon, ShieldIcon, Trash2Icon } from "./components/Icon";
-import { SPRING_TOAST, FADE_SWAP, EXIT_COVERED } from "./lib/motion";
+import { SPRING_TOAST, SWAP_ENTER, SWAP_EXIT } from "./lib/motion";
 import { listen } from "./lib/ipc";
 import "./theme/tokens.css";
 import "./styles/base.css";
@@ -44,22 +44,29 @@ import "./styles/inspector.css";
 import "./styles/tabs.css";
 import "./styles/overlays.css";
 
-/** Cover-style swap wrapper (tab level): the entering view fades in
- * OVER the still-visible old one; the old one fades out only once
- * covered, then unmounts. `data-exiting` (from usePresence, not DOM
- * order — framer's sync mode can splice a restored key back at its
- * old index on rapid A→B→A, which inverts :last-child) drives the CSS
- * lift: the exiting wrapper is absolute + pointer-dead from the first
- * frame of the swap, and a live view is never lifted. */
+/** Veil swap wrapper (tab level): the entering view is a SOLID sheet
+ * (CSS `background: var(--background)` on .db-tab-swap) that fades in
+ * over the still-visible old one + settles 5 px; the old one stays
+ * fully opaque beneath (its exit NEVER fades — no double exposure, no
+ * "page in page" ghost) and unmounts covered. The exit's 0.999
+ * opacity is a real tween (animating to the SAME value makes framer
+ * shortcut-complete and hard-cut the old view at ~30 ms, while the
+ * veil is barely 25% opaque); it holds the exit alive for SWAP_EXIT
+ * so the unmount lands strictly after the sheet is opaque. `data-exiting` (from
+ * useIsPresent, not DOM order — framer's sync mode can splice a
+ * restored key back at its old index on rapid A→B→A, which inverts
+ * :last-child) drives the CSS lift: the exiting wrapper is absolute +
+ * pointer-dead from the first frame of the swap, and a live view is
+ * never lifted. */
 function TabSwap({ children }: { children: ReactNode }) {
   const isPresent = useIsPresent();
   return (
     <motion.div
       className="db-tab-swap"
       data-exiting={isPresent ? undefined : ""}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1, pointerEvents: "auto", transition: FADE_SWAP }}
-      exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_COVERED }}
+      initial={{ opacity: 0, y: 5 }}
+      animate={{ opacity: 1, y: 0, pointerEvents: "auto", transition: SWAP_ENTER }}
+      exit={{ opacity: 0.999, y: 0, pointerEvents: "none", transition: SWAP_EXIT }}
     >
       {children}
     </motion.div>
@@ -233,7 +240,7 @@ function AppShell() {
           <Sidebar />
         </div>
         <div className="db-main-col">
-          {/* Tab crossfade (cover-style): see TabSwap for the design. */}
+          {/* Tab VEIL swap (see TabSwap for the design). */}
           <AnimatePresence initial={false}>
             <TabSwap key={tab}>
               {tab === "explore" && <ExploreView onPreview={openPreview} />}

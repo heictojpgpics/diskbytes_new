@@ -398,12 +398,17 @@
    * must overlay the entering one inside THIS column, not the page. */
   position: relative;
 }
-/* Tab-swap wrapper (App.tsx AnimatePresence cover-style crossfade).
- * The ENTERING view flows normally and fills the column; any EXITING
- * view (data-exiting, set from usePresence — immune to framer's DOM
- * reordering on interrupted swaps) is lifted out of flow by CSS
- * alone — no JS measurement, no injected style rules, and never a
- * live view. A stuck or slow exit can never push the live view down
+/* Tab-swap wrapper (App.tsx AnimatePresence VEIL swap): the ENTERING
+ * view flows normally and fills the column as a SOLID sheet (the veil
+ * — `background: var(--background)`); it fades in + settles 5px over
+ * the old one, so the old content is progressively COVERED, never
+ * blended with the new content (the crossfade's double-exposure read
+ * as "page in page" ghosting, worst in dark mode). The old view's exit
+ * never fades — it lingers fully opaque and unmounts covered. Any
+ * EXITING view (data-exiting, set from useIsPresent — immune to
+ * framer's DOM reordering on interrupted swaps) is lifted out of flow
+ * by CSS alone — no JS measurement, no injected style rules, and never
+ * a live view. A stuck or slow exit can never push the live view down
  * (the old popLayout approach had exactly that failure mode). All
  * wrappers are positioned so paint order follows DOM order. */
 .db-tab-swap {
@@ -412,10 +417,19 @@
   display: flex;
   flex-direction: column;
   position: relative;
+  /* The veil: a solid sheet carrying the entering view. Identical to
+   * the column's own background once opaque — invisible at rest, a
+   * gentle cover while animating. */
+  background: var(--background);
+  /* Deterministic paint order: the LIVE sheet always paints above the
+   * lingering exiting view, regardless of the DOM order framer's sync
+   * mode happens to produce on interrupted swaps. */
+  z-index: 1;
 }
 .db-tab-swap[data-exiting] {
   position: absolute;
   inset: 0;
+  z-index: 0;
   /* Dead the instant presence flips (same commit) — the framer exit
    * transition's pointerEvents lands only when its DELAYED timeline
    * starts, leaving a ~120 ms window where clicks on the half-faded

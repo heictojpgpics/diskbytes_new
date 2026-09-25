@@ -457,6 +457,35 @@ pub(crate) fn depth_below(tree: &Tree, node: u32, root: u32) -> u32 {
     d
 }
 
+/// Levels the layout will actually draw below `node`, bounded by
+/// `limit`: one level per sizeable-child level (dirs AND files — file
+/// cells occupy a level too), recursing only through dirs. Layouts that
+/// budget geometry per level (flame rows, mind-map rings) divide by the
+/// REACHABLE depth, not the requested one — a depth-7 request over a
+/// 3-level tree otherwise reserves 7 thin rings and the drawing fills
+/// only the inner ~40% of the canvas.
+pub(crate) fn reachable_levels(tree: &Tree, node: u32, limit: u32) -> u32 {
+    if limit == 0 {
+        return 0;
+    }
+    let children = tree.children_sorted(node);
+    let any_sizeable = children
+        .iter()
+        .any(|&id| tree.node(id).is_some_and(|c| c.on_disk > 0));
+    if !any_sizeable {
+        return 0;
+    }
+    let mut best: u32 = 0;
+    for &id in children {
+        if let Some(c) = tree.node(id) {
+            if c.is_dir() && c.on_disk > 0 {
+                best = best.max(reachable_levels(tree, id, limit - 1));
+            }
+        }
+    }
+    1 + best
+}
+
 /// Validate geometry before layout math (doc 04 §4 "assert bounds early").
 pub(crate) fn check_geometry(width: f32, height: f32) -> Result<(), CoreError> {
     if width <= 0.0 || height <= 0.0 || !width.is_finite() || !height.is_finite() {

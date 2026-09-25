@@ -189,23 +189,37 @@ export const CaptionCloseIcon = ({ size = 16, ...p }: IconProps) => (
 
 /* ── Windows system glyphs ────────────────────────────────────────── */
 
-/** UAC shield — the Windows 11 "administrator rights" mark (the four
- * quadrant security shield from imageres.dll, Fluent flat style). Any
- * elevation affordance ("Restart as administrator") wears THIS icon:
- * it is the shape Windows users have been trained to read as
- * "this will show a UAC prompt". Drawn quadrant-by-quadrant (no
- * clipPath — no duplicate-id hazard across instances). */
+/** UAC shield — the Windows 11 "administrator rights" mark (the Fluent
+ * four-quadrant security shield). Any elevation affordance ("Restart
+ * as administrator") wears THIS icon: it is the shape Windows users
+ * have been trained to read as "this will show a UAC prompt".
+ * Quadrant-by-quadrant paths (no clipPath — no duplicate-id hazard
+ * across instances). */
 export const UacShieldIcon = ({ size = 16, ...p }: IconProps) => (
   <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden focusable="false" {...p}>
-    {/* shield silhouette: center peak, sloped shoulders, curved V bottom */}
-    <path d="M12 1.6 4.1 4.2 V11 C4.1 16 7.5 20.2 12 22.3 C16.5 20.2 19.9 16 19.9 11 V4.2 Z"
-      fill="#39424E" fillOpacity="0.28" />
-    <path d="M12 2.3 4.8 4.6 V11 C4.8 15.6 7.8 19.3 12 21.2 Z" fill="#0078D4" />
-    <path d="M12 2.3 19.2 4.6 V11 C19.2 15.6 16.2 19.3 12 21.2 Z" fill="#7FBA00" />
-    <path d="M5.2 11.4 C5.9 15 8.4 18 12 19.3 V11.4 Z" fill="#FFB900" />
-    <path d="M18.8 11.4 C18.1 15 15.6 18 12 19.3 V11.4 Z" fill="#E81123" />
-    <path d="M12 1.6 4.1 4.2 V11 C4.1 16 7.5 20.2 12 22.3 C16.5 20.2 19.9 16 19.9 11 V4.2 Z"
-      fill="none" stroke="#39424E" strokeWidth="1.1" strokeLinejoin="round" />
+    {/* Top-Left: Fluent Blue */}
+    <path
+      d="M12 2 C10.5 2 7.2 3.6 4.6 3.6 C3.4 3.6 2.5 4.5 2.5 5.5 V12 H12 Z"
+      fill="#0078D4"
+    />
+
+    {/* Top-Right: Fluent Yellow */}
+    <path
+      d="M12 2 C13.5 2 16.8 3.6 19.4 3.6 C20.6 3.6 21.5 4.5 21.5 5.5 V12 H12 Z"
+      fill="#FFB900"
+    />
+
+    {/* Bottom-Left: Fluent Yellow */}
+    <path
+      d="M12 12 H2.5 C2.5 16.5 7 20.5 12 22 Z"
+      fill="#FFB900"
+    />
+
+    {/* Bottom-Right: Fluent Blue */}
+    <path
+      d="M12 12 H21.5 C21.5 16.5 17 20.5 12 22 Z"
+      fill="#0078D4"
+    />
   </svg>
 );
 

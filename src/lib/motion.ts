@@ -34,10 +34,17 @@ export const FADE_SWAP: Transition = { duration: 0.15, ease: "easeOut" };
 /** Overlay exit: quick, no spring (springs on exit feel sticky). */
 export const EXIT_FAST: Transition = { duration: 0.14, ease: "easeIn" };
 
-/** COVERED exit for content swaps (tab/stage): the entering view fades
- * IN over this one first (FADE_SWAP, 150 ms); only after it is covered
- * does this one fade out beneath it (delay 120 ms + 140 ms). The old
- * content never shows through the new one, there is no blank frame at
- * any point in the swap, and the unmount lands at ~260 ms. Used with
- * the CSS :not(:last-child) absolute lift in shell.css/explore.css. */
-export const EXIT_COVERED: Transition = { duration: 0.14, ease: "easeIn", delay: 0.12 };
+/** VEIL swap (tab/stage, session-4): the entering view is a SOLID
+ * sheet (`background: var(--background)` on the swap wrapper) that
+ * fades in over the old one — the old content is progressively VEILED
+ * by an opaque panel, never blended with the new content (the old
+ * crossfade's double-exposure read as "page in page" ghosting, most
+ * visible in dark mode). The old view stays fully opaque beneath and
+ * unmounts covered. 120 ms in, plus a 5 px rise so the sheet settles
+ * rather than pops — reads as a page laid down, not a re-render. */
+export const SWAP_ENTER: Transition = { duration: 0.12, ease: "easeOut" };
+
+/** The covered view's linger: opacity stays 1 the whole time (no
+ * fade-out = no ghost); the duration only paces the unmount AFTER the
+ * entering sheet is fully opaque (120 ms) plus a safety margin. */
+export const SWAP_EXIT: Transition = { duration: 0.2, ease: "linear" };

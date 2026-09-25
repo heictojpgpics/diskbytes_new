@@ -102,6 +102,51 @@
 }
 
 /* ── Duplicates ─────────────────────────────────────────────────────── */
+/* The live busy row: phase + counts + throughput + cancel, over a slim
+ * indeterminate-to-determinate progress bar. Replaces the old static
+ * "Hashing candidates…" line — a multi-GB hash now READS as work. */
+.db-dupes-busy {
+  align-items: stretch;
+  padding: 14px 16px 12px;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--card);
+}
+.db-dupes-busy-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.db-dupes-phase {
+  font-weight: 640;
+  color: var(--text);
+  white-space: nowrap;
+}
+.db-dupes-counts {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-dupes-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.db-dupes-bar::after {
+  content: "";
+  display: block;
+  height: 100%;
+  width: var(--pct, 0%);
+  border-radius: inherit;
+  background: var(--ink);
+  transition: width 0.25s var(--ease-out);
+}
 .db-dup-group {
   border: 1px solid var(--border);
   border-radius: var(--radius-l);

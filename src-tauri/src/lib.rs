@@ -156,6 +156,7 @@ pub fn run() {
             commands::sidebar::quick_win_items,
             commands::sidebar::file_types,
             commands::dupes::find_duplicates,
+            commands::dupes::cancel_duplicates,
             commands::applications::list_applications,
             commands::applications::uninstall_app,
             commands::applications::leftover_root_paths,

@@ -6,8 +6,8 @@
 
 use crate::error::CoreError;
 use crate::layout::{
-    check_geometry, effective_branch_root, node_color, pack_rgba, Cell, ColorMode, LayoutBuffer,
-    LayoutMeta,
+    check_geometry, effective_branch_root, node_color, pack_rgba, reachable_levels, Cell,
+    ColorMode, LayoutBuffer, LayoutMeta,
 };
 use crate::scan::node::Tree;
 
@@ -108,32 +108,6 @@ pub fn flame(
             total_bytes: total,
         },
     })
-}
-
-/// Rows the chart will actually draw below the root, bounded by
-/// `limit`: one row per sizeable-child level (dirs AND files — file
-/// blocks occupy a row too), recursing only through dirs. Mirrors the
-/// emission's descent so the adaptive row count matches the drawn rows.
-fn reachable_levels(tree: &Tree, node: u32, limit: u32) -> u32 {
-    if limit == 0 {
-        return 0;
-    }
-    let children = tree.children_sorted(node);
-    let any_sizeable = children
-        .iter()
-        .any(|&id| tree.node(id).is_some_and(|c| c.on_disk > 0));
-    if !any_sizeable {
-        return 0;
-    }
-    let mut best: u32 = 0;
-    for &id in children {
-        if let Some(c) = tree.node(id) {
-            if c.is_dir() && c.on_disk > 0 {
-                best = best.max(reachable_levels(tree, id, limit - 1));
-            }
-        }
-    }
-    1 + best
 }
 
 /// Recursive row layout: children of `node` inside x-span `(x0..x1)` on

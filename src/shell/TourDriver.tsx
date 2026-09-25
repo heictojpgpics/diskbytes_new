@@ -83,6 +83,32 @@ export function TourDriver() {
           apply: () => useViewStore.getState().setTab(t),
         });
       }
+      // duplicates: RUN the scan (3× dwell — the ~1 s pipeline + result
+      // render must land inside the capture window). Switch to the tab,
+      // then fire once the view is mounted + subscribed (poll — a fixed
+      // delay races the veil swap's mount). The busy row and the group
+      // cards are what production screenshots must show — the empty
+      // state alone verified nothing about the pipeline.
+      steps.push({
+        name: "duplicates-run",
+        dwell: 3,
+        apply: () => {
+          useViewStore.getState().setTab("duplicates");
+          const fire = () => window.dispatchEvent(new CustomEvent("db-tour-dupes-run"));
+          let tries = 0;
+          const waitMount = () => {
+            const h1 = document.querySelector(".db-main-col h1");
+            const heading = [...document.querySelectorAll(".db-main-col h1")].map((h) => h.textContent);
+            const mounted = heading.includes("Duplicates") || h1?.textContent === "Duplicates";
+            if (mounted || tries > 40) fire();
+            else {
+              tries += 1;
+              window.setTimeout(waitMount, 50);
+            }
+          };
+          window.setTimeout(waitMount, 120);
+        },
+      });
       // license dialog open + pro posture
       steps.push({
         name: "license-dialog",

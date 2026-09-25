@@ -952,3 +952,30 @@ Work Log:
 Stage Summary:
 - Session 3 complete: streaming reverted, dupes parallel+screened, applications boot-preloaded, layout/transition/alignment/overflow/admin-icon all fixed and now verified in the production Windows build
 - Final state: HEAD all-green, deliverable = the repo itself (installer artifact in CI)
+---
+Task ID: uiux-9 (session 4)
+Agent: main (Super Z)
+Task: User report: duplicates scan "just says Scanning forever" on real machine; residual page-switch ghosting ("page in page", worst in dark mode); fix mind map; replace UAC shield with the user's exact Fluent SVG; verify with multiple VLM demos; test the dupes fix on Windows Actions
+
+Work Log:
+- DIAGNOSED the dupes hang: no deadlock — the pipeline had ZERO liveness feedback and no cancellation. A real disk with hundreds of GB in same-size buckets hashes for many minutes behind a static "Scanning…" label; the user correctly reads that as broken. CI never caught it: the tour only visited the empty state, never clicked Scan
+- RUST dupes.rs rewritten (faster AND better):
+  * Live progress: `dupes-progress` events (phase collect/prefix/screen/full/done, filesDone/Total, bytesDone/Total, elapsedMs) from a 200 ms ticker thread sampling atomics the rayon workers bump — zero mutex on the hash path
+  * Cancellation: `cancel_duplicates` bumps a generation counter in AppState (`dupes_cancel: Arc<AtomicU64>`); the run latches at start, checks per-file, returns Err("cancelled") — a late cancel can never poison a newer run
+  * Speed: tier-2 mid-file screen (SHA-256 over [64 KiB..1 MiB] + last 1 MiB) kills same-prefix false positives (identical headers, zero-padded formats) at 2 MiB/file BEFORE full multi-GB reads; FILE_FLAG_SEQUENTIAL_SCAN on every Windows hash read; both passes stay parallel on rayon
+  * Correctness/safety: protected (Windows-managed) files excluded from candidates (spec §4 — pagefile.sys must never be offered as a "duplicate"); locked/unreadable files skipped honestly; DTO camelCase regression test
+  * Windows E2E test (runs in ci.yml `cargo test --workspace` on windows-latest): scans a REAL temp tree with the REAL platform + scanner — 3 identical 8 MiB files, a same-prefix pair that differs INSIDE the mid windows (screened), 2 identical 300 KiB files, 3 zero-byte files, a share_mode(0)-locked file; asserts exactly 2 groups, no leaks, prints timing. Plus a mid-fingerprint unit test and a cancellation test
+- UI DuplicatesView: BusyRow with phase label + live file/byte counters + client-side MB/s + progress bar + Cancel button; cancelled rejections reset quietly (no error banner); tour hook `db-tour-dupes-run`
+- Mock parity: find_duplicates runs the same 4-phase progress cadence and rejects "cancelled" on cancel; cancel_duplicates command
+- TourDriver: new `duplicates-run` step (3× dwell) switches to the tab, polls for mount, fires the scan — production screenshots now VERIFY the pipeline E2E (real duplicate groups exist in the CI tree: the 8×5 MB zero-filled drivers + 12×256 KB caches)
+- TRANSITIONS — the ghost killed by construction: replaced the crossfade (both views semi-transparent = double exposure) with the VEIL swap: the entering view is a SOLID sheet (`background: var(--background)`) that fades in + settles 5 px over the old one; the old view NEVER fades (exit tweens opacity 1→0.999 — animating to the same value makes framer shortcut-complete and hard-cut at ~30 ms) and unmounts covered at 200 ms; z-index guarantees the live sheet paints above regardless of framer's DOM order on interrupted swaps. SWAP_ENTER 120 ms easeOut / SWAP_EXIT 200 ms linear (motion.ts; EXIT_COVERED retired). DOM-timeline verified at BOTH levels (tab + stage): entering ramps 0→1 in 120 ms, exit holds 0.999 throughout, unmount lands strictly after the sheet is opaque, entering always z-1
+- MIND MAP fixed (the "tiny, off-center map"): root cause 1 — ring budget divided r_max by the REQUESTED depth (7) so ~3-level trees filled the inner ~40%; root cause 2 — single-child CHAIN levels consumed ring budget despite collapsing onto the parent position; root cause 3 — deep levels full of culled micro-dots (<2.5 px) starved the visible mass. Fixes: `spread_rings` (rings counted only for levels that actually spread, chains pass the budget through; depth stays the hard ceiling) + a scale-to-fit post-pass (uniform position scaling so the visible extent exactly reaches r_max, radii stay size-proportional, clamped 0.5–3×). Rust + mock parity, 2 new core tests (shallow fill, window non-overlap lives in the E2E). Measured: fill 54%→99%; VLM: structure healthy, no label overlap, no defects
+- UacShieldIcon: replaced with the user's EXACT four-quadrant Fluent SVG (blue top-left/bottom-right, yellow top-right/bottom-left) — pixel-verified both colors render (1052/1056 px balanced)
+- VLM demo battery: all 6 canvas modes healthy (contact sheet PASS), dark-mode duplicates PASS, tour duplicates-run PASS (3 groups + summary), mind map light+dark PASS, shield pixel check PASS; transitions DOM-verified
+- Gates: tsc 0, vitest 54/54, build OK, core fmt+clippy clean, 197 core tests (160 unit + 21 platform + 16 property)
+
+Stage Summary:
+- Dupes: live progress + cancel + tier-2 screen + sequential-scan + protected exclusion, with a real-Windows E2E test in CI and a tour step that captures the real result state
+- Transitions: ghost-free veil swap at both tab and mode level, 200 ms end-to-end, dark-mode clean
+- Mind map fills the canvas; UAC shield is the user's exact SVG
+- Next: push → monitor all 4 workflows on real Windows/macOS runners → pull screenshots → VLM-verify the production dupes result + transitions

@@ -5,15 +5,18 @@
  * "Duplicate").
  *
  * One invoke, one result — the engine's 3-pass pipeline (size groups →
- * parallel 64 KiB prefix hashes → parallel full SHA-256) is fast enough
- * that streaming machinery only added races. Tree changes (new scan,
- * cleanup commit) invalidate the result; the user re-scans explicitly.
+ * parallel 64 KiB prefix hashes → tier-2 mid screens → parallel full
+ * SHA-256) reports live `dupes-progress` events (phase, files, bytes)
+ * and accepts cancellation (`cancel_duplicates`). The busy row renders
+ * that stream so a multi-GB hash READS as work, never as a hang. Tree
+ * changes (new scan, cleanup commit) invalidate the result; the user
+ * re-scans explicitly.
  */
 import { useEffect, useRef, useState } from "react";
-import { CopyIcon, FileIcon, SearchIcon, CheckIcon, Trash2Icon } from "../components/Icon";
+import { CopyIcon, FileIcon, SearchIcon, CheckIcon, Trash2Icon, XIcon } from "../components/Icon";
 import { TailPath } from "../components/TailPath";
 import { EmptyState } from "../components/buttons";
-import { invoke } from "../lib/ipc";
+import { invoke, listen } from "../lib/ipc";
 import { bytes } from "../lib/format";
 import { useScanStore } from "../state/scan";
 import { useCleanupStore } from "../state/cleanup";
@@ -34,6 +37,75 @@ interface DupesResult {
   files: number;
 }
 
+/** The `dupes-progress` event payload (camelCase DTO from Rust). */
+interface DupesProgress {
+  phase: "collect" | "prefix" | "screen" | "full" | "done";
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  bytesTotal: number;
+  elapsedMs: number;
+}
+
+const PHASE_LABEL: Record<DupesProgress["phase"], string> = {
+  collect: "Collecting candidates…",
+  prefix: "Hashing 64 KB prefixes…",
+  screen: "Screening same-prefix candidates…",
+  full: "Verifying full contents…",
+  done: "Done",
+};
+
+/** The live busy row: phase + files + bytes + a cancel affordance. The
+ * throughput is computed client-side from consecutive event deltas
+ * (250 ms-ish cadence) — the engine stays a dumb counter source. */
+function BusyRow({ progress, onCancel }: { progress: DupesProgress | null; onCancel: () => void }) {
+  const rate = useRef<{ at: number; bytes: number; v: number }>({ at: 0, bytes: 0, v: 0 });
+  let mbps = 0;
+  if (progress) {
+    const now = performance.now();
+    const r = rate.current;
+    if (r.at && now - r.at > 400 && progress.bytesDone >= r.bytes) {
+      const v = ((progress.bytesDone - r.bytes) / ((now - r.at) / 1000)) / (1024 * 1024);
+      if (v > 0) rate.current = { at: now, bytes: progress.bytesDone, v };
+    } else if (!r.at) {
+      rate.current = { at: now, bytes: progress.bytesDone, v: 0 };
+    }
+    mbps = rate.current.v;
+  }
+  const pct =
+    progress && progress.bytesTotal > 0
+      ? Math.min(100, Math.round((progress.bytesDone / progress.bytesTotal) * 100))
+      : progress && progress.filesTotal > 0
+        ? Math.min(100, Math.round((progress.filesDone / progress.filesTotal) * 100))
+        : 0;
+  return (
+    <div className="db-loading-block db-dupes-busy" role="status">
+      <div className="db-dupes-busy-line">
+        <span className="db-dupes-phase">
+          {progress ? PHASE_LABEL[progress.phase] : "Starting…"}
+        </span>
+        {progress && progress.filesTotal > 0 && (
+          <span className="tnum db-dupes-counts">
+            {progress.filesDone.toLocaleString()} / {progress.filesTotal.toLocaleString()} files
+            {progress.bytesTotal > 0 && (
+              <> · {bytes(progress.bytesDone)} / {bytes(progress.bytesTotal)}</>
+            )}
+            {mbps > 0.5 && <> · {mbps.toFixed(0)} MB/s</>}
+          </span>
+        )}
+        <button type="button" className="db-outline compact auto" onClick={onCancel}>
+          <XIcon size={12} /> Cancel
+        </button>
+      </div>
+      <div
+        className="db-dupes-bar"
+        aria-hidden="true"
+        style={{ ["--pct" as string]: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
 export function DuplicatesView() {
   const status = useScanStore((s) => s.status);
   const generation = useScanStore((s) => s.generation);
@@ -42,6 +114,7 @@ export function DuplicatesView() {
   const [result, setResult] = useState<DupesResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<DupesProgress | null>(null);
   const [keeps, setKeeps] = useState<Map<string, string>>(new Map());
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   // Path-join identity: group ids are re-indexed on every scan, so keep
@@ -51,11 +124,16 @@ export function DuplicatesView() {
   // tree changed mid-hash) resolves into a no-op instead of painting a
   // stale generation over the reset state.
   const scanSeq = useRef(0);
+  // The scan fn for the tour hook (CI screenshots exercise the real
+  // pipeline via `db-tour-dupes-run` — the empty state otherwise never
+  // shows results in production captures).
+  const scanRef = useRef<() => void>(() => undefined);
 
   const scan = async () => {
     const seq = ++scanSeq.current;
     setBusy(true);
     setError(null);
+    setProgress(null);
     try {
       const res = await invoke<DupesResult>("find_duplicates", { generation });
       if (scanSeq.current !== seq) return;
@@ -63,10 +141,47 @@ export function DuplicatesView() {
       setExpanded(new Set(res.groups.slice(0, 3).map((g) => g.id)));
       track(EVENTS.duplicatesScanCompleted, { groups: res.groups.length, wasted: res.wastedTotal });
     } catch (e) {
-      if (scanSeq.current === seq) setError(String(e));
+      if (scanSeq.current === seq) {
+        // Cancellation is a USER action, not a failure — reset quietly.
+        const msg = String(e);
+        if (!/cancel/i.test(msg)) setError(msg);
+      }
     } finally {
-      if (scanSeq.current === seq) setBusy(false);
+      if (scanSeq.current === seq) {
+        setBusy(false);
+        setProgress(null);
+      }
     }
+  };
+  scanRef.current = () => void scan();
+
+  // Live progress: the Rust ticker emits every ~200 ms while the
+  // pipeline runs; the events are ignored outside a busy window.
+  useEffect(() => {
+    if (!busy) return;
+    let un: (() => void) | null = null;
+    let disposed = false;
+    void listen<DupesProgress>("dupes-progress", (p) => {
+      if (!disposed) setProgress(p);
+    }).then((u) => {
+      un = u;
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      un?.();
+    };
+  }, [busy]);
+
+  // Tour hook (CI): run the scan when the tour reaches the duplicates
+  // step so production screenshots show the real result state.
+  useEffect(() => {
+    const run = () => scanRef.current();
+    window.addEventListener("db-tour-dupes-run", run);
+    return () => window.removeEventListener("db-tour-dupes-run", run);
+  }, []);
+
+  const cancel = () => {
+    void invoke("cancel_duplicates").catch(() => undefined);
   };
 
   // Tree-change invalidation: a new scan (sidebar) or a cleanup commit
@@ -81,6 +196,7 @@ export function DuplicatesView() {
       setResult(null);
       setKeeps(new Map());
       setExpanded(new Set());
+      setProgress(null);
       scanSeq.current += 1; // supersede any in-flight scan
       setBusy(false);
     }
@@ -152,11 +268,7 @@ export function DuplicatesView() {
         </div>
       )}
 
-      {busy && (
-        <div className="db-loading-block" role="status">
-          <span>Hashing candidates (size groups → 64 KB prefix → full)…</span>
-        </div>
-      )}
+      {busy && <BusyRow progress={progress} onCancel={cancel} />}
 
       {!result && !busy && status === "done" && (
         <EmptyState

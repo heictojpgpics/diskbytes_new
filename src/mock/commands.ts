@@ -21,6 +21,11 @@ let scanTicker: number | null = null;
 let lastDone: { generation: number; stats: [number, number, number, number] | null; error: string | null } | null = null;
 let monitorTicker: number | null = null;
 let monitorSession = 0;
+/** Duplicates run state (mirrors the Rust ctl): a live run emits
+ *  `dupes-progress` on a ~200 ms ticker and can be cancelled — the
+ *  pending promise rejects with "cancelled" exactly like the engine. */
+let dupesCancelGen = 0;
+let dupesTicker: number | null = null;
 const snapshots: { id: string; root: string; takenAt: number; total: number; folders: number; map: Map<string, number> }[] = [];
 let license = { posture: "unlicensed", isPro: false, tier: "", graceDaysLeft: 0, freeCommitCap: 1 * GB };
 let lastScanRoot = 0;
@@ -791,24 +796,75 @@ const commands: Record<string, Cmd> = {
     return result;
   },
 
-  // ── duplicates ────────────────────────────────────────────────────
-  // One invoke, one result — matches the reverted engine contract (the
-  // parallel 3-pass pipeline is fast; the streaming experiment raced
-  // itself). The ~900 ms window below keeps the busy state honest so
-  // the loading row is exercisable.
+  // ── duplicates ─────────────────────────────────────────────────────────────────
+  // One invoke, one result — matches the engine contract. The ~900 ms
+  // window runs the SAME progress cadence as Rust (phase → files →
+  // bytes every ~200 ms) so the busy row's live counters, throughput
+  // and bar are exercisable in the browser demo, and cancellation
+  // rejects with "cancelled" exactly like the engine.
   find_duplicates: () =>
-    new Promise((resolve) => {
-      window.setTimeout(
-        () =>
+    new Promise((resolve, reject) => {
+      const latch = dupesCancelGen;
+      const started = performance.now();
+      const totalFiles = 1_420;
+      const totalBytes = 38.2 * GB;
+      const cancelled = () => dupesCancelGen !== latch;
+      const phases: { phase: "collect" | "prefix" | "screen" | "full"; frac: number }[] = [
+        { phase: "collect", frac: 0.06 },
+        { phase: "prefix", frac: 0.42 },
+        { phase: "screen", frac: 0.14 },
+        { phase: "full", frac: 0.38 },
+      ];
+      const duration = 850 + Math.random() * 250;
+      const emit = (phase: string, frac: number) => {
+        emitMockEvent("dupes-progress", {
+          phase,
+          filesDone: Math.round(totalFiles * frac),
+          filesTotal: phase === "collect" ? 0 : totalFiles,
+          bytesDone: Math.round(totalBytes * frac),
+          bytesTotal: phase === "collect" ? 0 : totalBytes,
+          elapsedMs: Math.round(performance.now() - started),
+        });
+      };
+      let t = 0;
+      const step = () => {
+        if (cancelled()) {
+          if (dupesTicker !== null) window.clearInterval(dupesTicker);
+          dupesTicker = null;
+          reject("cancelled");
+          return;
+        }
+        t += 200;
+        const overall = Math.min(1, t / duration);
+        let acc = 0;
+        let current = phases[phases.length - 1];
+        for (const ph of phases) {
+          acc += ph.frac;
+          if (overall <= acc) {
+            current = ph;
+            break;
+          }
+        }
+        emit(current.phase, overall);
+        if (overall >= 1 && dupesTicker !== null) {
+          window.clearInterval(dupesTicker);
+          dupesTicker = null;
+          emit("done", 1);
           resolve({
             generation: tree.generation,
             groups: DUPES,
-            wastedTotal: DUPES.reduce((s, g) => s + g.wasted, 0),
-            files: 3821,
-          }),
-        850 + Math.random() * 250,
-      );
+            wastedTotal: DUPES.reduce((sm, g) => sm + g.wasted, 0),
+            files: 3_821,
+          });
+        }
+      };
+      dupesTicker = window.setInterval(step, 200);
+      step();
     }),
+  cancel_duplicates: () => {
+    dupesCancelGen += 1;
+    return dupesCancelGen;
+  },
 
   // ── applications ──────────────────────────────────────────────────
   // One invoke, one list — the Rust side caches the enumeration for the

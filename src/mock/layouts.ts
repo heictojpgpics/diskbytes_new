@@ -108,11 +108,42 @@ function effectiveBranchRoot(tree: MockTree, rootId: number): number {
       return k !== undefined && (k.onDisk > 0 || k.logical > 0);
     });
     if (sizeable.length !== 1) return cur;
-    const only = tree.nodes[sizeable[0]];
-    if (!only.isDir || only.children.length === 0) return cur;
-    cur = sizeable[0];
+    const only = sizeable[0];
+    const k = tree.nodes[only];
+    if (!k || !k.isDir || k.children.length === 0) return cur;
+    cur = only;
   }
   return cur;
+}
+
+/**
+ * Rings the map will actually SPREAD over below `node`, bounded by
+ * `limit` levels — a level with exactly one sizeable child consumes a
+ * LEVEL but no ring (the chain collapses onto the parent position); a
+ * level with ≥ 2 sizeable children consumes a level AND a ring
+ * (mirrors the Rust `mindmap::spread_rings`). Mind-map ring budgeting
+ * divides by the SPREADING levels, not the requested depth — counting
+ * chain levels as ring consumers left shallow maps at ~40-50% of the
+ * canvas (the "tiny, off-center mind map" bug).
+ */
+function spreadRings(tree: MockTree, node: number, limit: number): number {
+  const kids = childrenSorted(tree, node);
+  if (kids.length === 0) return 0;
+  if (kids.length === 1) {
+    // Chain level: no ring; the child inherits the budget.
+    const kn = tree.nodes[kids[0].node];
+    const descend = !!kn && kn.isDir && kn.children.length > 0;
+    return descend && limit > 0 ? spreadRings(tree, kids[0].node, limit - 1) : 0;
+  }
+  if (limit <= 0) return 0;
+  let best = 0;
+  for (const k of kids) {
+    const kn = tree.nodes[k.node];
+    if (kn && kn.isDir && kn.children.length > 0) {
+      best = Math.max(best, spreadRings(tree, k.node, limit - 1));
+    }
+  }
+  return 1 + best;
 }
 
 /**
@@ -598,6 +629,11 @@ export function buildLayout(
       g: [cx, cy, 14, cx, cy],
     });
     if (depth > 0 && total > 0) {
+      // ADAPTIVE ring budget (Rust parity): rings = SPREADING levels
+      // (chains consume no ring), depth stays the hard ceiling — the
+      // map fills the full radius on shallow trees instead of hugging
+      // the center.
+      const rings = spreadRings(tree, rootId, depth);
       const layoutBranches = (
         nodeId: number,
         px: number,
@@ -605,12 +641,13 @@ export function buildLayout(
         ringR: number,
         depthHere: number,
         depthLeft: number,
+        ringsLeft: number,
         rootTotal: number,
         a0: number,
         a1: number,
         topIndex: number,
       ): void => {
-        if (depthLeft === 0 || ringR <= 4) return;
+        if (depthLeft === 0) return;
         const children = childrenSorted(tree, nodeId);
         const sum = children.reduce((a, b) => a + b.v, 0);
         if (sum === 0) return;
@@ -618,8 +655,9 @@ export function buildLayout(
         // (mirrors Rust: the old full-TAU span bent chains toward 6
         // o'clock, hanging the map below center at single-drive roots).
         const collapsed = children.length === 1;
-        const stepR = ringR / depthLeft; // per-level radius step
-        const levelR = ringR - stepR * (depthLeft - 1);
+        const rings = Math.max(ringsLeft, 1);
+        const stepR = ringR / rings; // per-spreading-level radius step
+        const levelR = ringR - stepR * (rings - 1);
         let cursor = a0; // start at the sector's leading edge
         for (let i = 0; i < children.length; i++) {
           if (cells.length >= MAX_CELLS) return;
@@ -675,6 +713,9 @@ export function buildLayout(
               collapsed ? ringR : ringR - stepR,
               depthHere + 1,
               depthLeft - 1,
+              // Rings decrement ONLY when this level actually spread;
+              // chains pass the budget through (Rust parity).
+              collapsed ? ringsLeft : Math.max(0, ringsLeft - 1),
               rootTotal,
               cursor,
               cursor + span,
@@ -684,7 +725,31 @@ export function buildLayout(
           cursor += span;
         }
       };
-      layoutBranches(rootId, cx, cy, rMax, 1, depth, total, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2, 0);
+      layoutBranches(rootId, cx, cy, rMax, 1, depth, rings, total, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2, 0);
+      // Scale-to-fit (Rust parity): the ring budget can under-fill the
+      // canvas when the deepest spreading levels hold micro-dots that
+      // cull away — the VISIBLE mass then hugs the center. Uniformly
+      // scale positions (radii stay size-proportional; links ride the
+      // same transform) so the visible extent exactly reaches rMax.
+      const dots = cells.filter((c) => (c.flags & 0b111) === KIND_DOT);
+      if (dots.length > 1) {
+        let reach = 0;
+        for (const c of dots) {
+          if (c.id === rootId) continue;
+          reach = Math.max(reach, Math.hypot(c.g[0] - cx, c.g[1] - cy) + c.g[2]);
+        }
+        if (reach > 1e-6) {
+          const scale = Math.min(3, Math.max(0.5, rMax / reach));
+          for (const c of dots) {
+            if (c.id !== rootId) {
+              c.g[0] = cx + (c.g[0] - cx) * scale;
+              c.g[1] = cy + (c.g[1] - cy) * scale;
+            }
+            c.g[3] = cx + (c.g[3] - cx) * scale;
+            c.g[4] = cy + (c.g[4] - cy) * scale;
+          }
+        }
+      }
     }
   }
 

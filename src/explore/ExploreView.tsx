@@ -30,7 +30,7 @@ import { CANVAS_MODES } from "../state/vizUi";
 import { getHoverDetails } from "../viz/layoutIpc";
 import { getNodeDetails, type NodeDetailsData } from "../viz/exploreIpc";
 import { EVENTS, track } from "../lib/analytics";
-import { FADE_SWAP, EXIT_COVERED } from "../lib/motion";
+import { SWAP_ENTER, SWAP_EXIT } from "../lib/motion";
 
 /** Smoothly-rolling "N files · X GB" live counter (motion values, no
  * per-tick React re-render churn — the 150 ms IPC ticks TWEEN into each
@@ -51,18 +51,22 @@ function ScanCounter({ files, totalBytes }: { files: number; totalBytes: number 
   return <motion.span className="db-live-counter tnum">{text}</motion.span>;
 }
 
-/** Cover-style swap wrapper (stage/mode level — see App.tsx TabSwap
- * for the design): `data-exiting` from useIsPresent drives the CSS
- * lift, immune to framer's DOM reordering on interrupted swaps. */
+/** Veil swap wrapper (stage/mode level — see App.tsx TabSwap for
+ * the design): the entering view is a SOLID sheet fading in + rising
+ * 5 px over the still-opaque old one; `data-exiting` from
+ * useIsPresent drives the CSS lift, immune to framer's DOM
+ * reordering on interrupted swaps. The old view's exit NEVER fades —
+ * no double exposure (the "shadow/page-in-page" ghost), and the new
+ * canvas's mount→fetch→paint window hides under the veil. */
 function StageSwap({ children }: { children: ReactNode }) {
   const isPresent = useIsPresent();
   return (
     <motion.div
       className="db-stage-swap"
       data-exiting={isPresent ? undefined : ""}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1, pointerEvents: "auto", transition: FADE_SWAP }}
-      exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_COVERED }}
+      initial={{ opacity: 0, y: 5 }}
+      animate={{ opacity: 1, y: 0, pointerEvents: "auto", transition: SWAP_ENTER }}
+      exit={{ opacity: 0.999, y: 0, pointerEvents: "none", transition: SWAP_EXIT }}
     >
       {children}
     </motion.div>
@@ -389,14 +393,12 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
         <UnreadableNotice />
       </div>
       <section ref={stageEl} className="db-visual-stage db-scroll" aria-label={`${mode} visualization`}>
-        {/* Mode-swap CROSSFADE (cover-style): the new mode fades in
-         * OVER the still-visible old one — the new canvas's layout-IPC
-         * window (mount → blank → fetch → paint, the reported
-         * "blink") happens underneath the old view. The exiting
-         * wrapper is lifted absolute by pure CSS (:not(:last-child)),
-         * so no layout shift, no injected style rules, and a stuck exit
-         * can never reflow the stage. `initial={false}` keeps the very
-         * first mount static. */}
+        {/* Mode-swap VEIL (see StageSwap for the design): the entering
+         * mode's solid sheet covers the old one — the new canvas's
+         * mount → fetch → paint window hides beneath the veil, the old
+         * view never fades (no ghost), and a stuck exit can never
+         * reflow the stage. `initial={false}` keeps the very first
+         * mount static. */}
         <AnimatePresence initial={false}>
           <StageSwap key={`${generation}:${currentFolder}:${mode}`}>
           {mode === "Folders" && (
