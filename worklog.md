@@ -857,3 +857,19 @@ Work Log:
 Stage Summary:
 - Gates: tsc 0, vitest 54/54, build OK; commit ready
 - CI was green on 0ff896b (all 4 workflows); this batch (8540877+) pending
+
+---
+Task ID: uiux-4
+Agent: main (Super Z)
+Task: Overflow batch — empty-state CTAs, keyboard shortcuts, viz hit targets
+
+Work Log:
+- Empty-state scan CTAs: Duplicates / Applications / Snapshots no-scan states now carry a "Scan This PC" ink button (startScan from the scan store) — the three tabs were text-only dead ends while Explore/Monitor had actions
+- FoldersMode file rows: Enter previews (dblclick was the only path); keyboard users were 3 interactions deep
+- Mind-map DOT hit-radius padded to 7px floor (2.5-6px dots were sub-pointer targets — hover probes missed)
+- All gates green: tsc 0, vitest 54/54, build OK; empty CTA live-verified
+- Pushed 5d73a7d; CI running (previous runs superseded by the new push, not failed)
+
+Stage Summary:
+- Session totals across the 4 waves: merge + 7 user-reported fixes + 2 review rounds (20 findings, all fixed) + 2 audit rounds (interaction + viz, all P1/P2 fixed) + viz top-10 refinements + overflow batch
+- 6 commits pushed; CI green through 8540877, final runs in flight
