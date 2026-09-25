@@ -679,8 +679,7 @@ mod tests {
         fn scratch(name: &str) -> PathBuf {
             let d =
                 std::env::temp_dir().join(format!("db-dupes-e2e-{}-{}", std::process::id(), name));
-            // R7.1-allow: test-scratch (own %TEMP% dir, test-only)
-            let _ = fs::remove_dir_all(&d);
+            let _ = fs::remove_dir_all(&d); // R7.1-allow: test-scratch (own %TEMP% dir, test-only)
             fs::create_dir_all(&d).expect("scratch dir");
             d
         }
@@ -704,8 +703,7 @@ mod tests {
         struct TempTree(PathBuf);
         impl Drop for TempTree {
             fn drop(&mut self) {
-                // R7.1-allow: test-scratch (own %TEMP% dir, test-only)
-                let _ = fs::remove_dir_all(&self.0);
+                let _ = fs::remove_dir_all(&self.0); // R7.1-allow: test-scratch (own %TEMP% dir, test-only)
             }
         }
 
