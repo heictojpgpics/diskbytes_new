@@ -16,6 +16,7 @@ import { useFocusTrap } from "../lib/useFocusTrap";
 import { bytes } from "../lib/format";
 import { BIN_NAME, IS_MAC } from "../lib/platform";
 import { invoke } from "../lib/ipc";
+import { SPRING_POP, EXIT_FAST } from "../lib/motion";
 
 export interface CommitFailure {
   path: string;
@@ -69,7 +70,15 @@ export function CleanupQueuePopover({
       setFailure(null);
       return;
     }
+    // Outside-close (capture phase). While the confirm dialog is open the
+    // popover is effectively modal: the dialog renders as a sibling of the
+    // popover (not inside popRef), so an unconditional containment check
+    // would unmount the tree on the pointerdown that precedes every dialog
+    // button click — Cancel and Commit could never fire. Suspend
+    // outside-close while confirming; the dialog's own scrim/Esc handles
+    // dismissal.
     const onDown = (e: PointerEvent) => {
+      if (confirming) return;
       if (popRef.current && !popRef.current.contains(e.target as Node)) onClose();
     };
     const esc = (e: KeyboardEvent) => {
@@ -85,8 +94,6 @@ export function CleanupQueuePopover({
       window.removeEventListener("keydown", esc);
     };
   }, [open, onClose, confirming]);
-
-  if (!open) return null;
 
   const total = items.reduce((a, i) => a + i.size, 0);
   const freeCap = license?.freeCommitCap ?? 0;
@@ -134,103 +141,105 @@ export function CleanupQueuePopover({
   return (
     <>
       <AnimatePresence>
-        <motion.div
-          ref={popRef}
-          className="db-pop"
-          style={anchor === "topbar" && anchorPos ? { right: anchorPos.right, top: anchorPos.top } : undefined}
-          role="dialog"
-          aria-label="Cleanup Queue"
-          initial={{ opacity: 0, y: -8, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ type: "spring", stiffness: 520, damping: 34 }}
-        >
-          <div className="db-pop-head">
-            <div>
-              <h3>Cleanup Queue</h3>
-              <span className="db-pop-total tnum">{items.length > 0 ? `${bytes(total)} staged` : "Nothing staged"}</span>
-            </div>
-            <button type="button" className="db-pop-close" onClick={onClose} aria-label="Close">
-              <XIcon size={15} />
-            </button>
-          </div>
-          <div className="db-pop-actions">
-            <button type="button" className="db-btn-clear" disabled={items.length === 0} onClick={clear}>
-              Clear
-            </button>
-            <button
-              type="button"
-              className="db-btn-commit"
-              disabled={items.length === 0 || committing || overFreeCap || scanRunning}
-              title={
-                overFreeCap
-                  ? `Free tier caps cleanup at ${bytes(freeCap)} — activate DiskBytes Pro to clean more`
-                  : scanRunning
-                    ? "Wait for the scan to finish — cleaning needs a settled map"
-                    : undefined
-              }
-              onClick={() => setConfirming(true)}
-            >
-              <Trash2Icon size={14} />
-              {committing ? "Moving…" : `Move to ${BIN_NAME}…`}
-            </button>
-          </div>
-          {failure && (
-            <div className="db-pop-failed" role="alert">
-              <strong>{failure.error ? "Commit failed" : `Couldn’t recycle ${failure.count} item(s)`}</strong>
-              {failure.error ? (
-                <p style={{ margin: 0, fontSize: 11 }}>{failure.error}</p>
-              ) : (
-                <ul>
-                  {failure.failed.slice(0, 8).map((f) => (
-                    <li key={f.path} title={f.path}>
-                      {f.reason} — {f.path}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <button
-                type="button"
-                className="db-outline compact"
-                style={{ marginTop: 8, width: "auto", padding: "0 12px" }}
-                onClick={() => setFailure(null)}
-              >
-                Dismiss
+        {open && anchorPos && (
+          <motion.div
+            ref={popRef}
+            className="db-pop"
+            style={anchor === "topbar" ? { right: anchorPos.right, top: anchorPos.top } : undefined}
+            role="dialog"
+            aria-label="Cleanup Queue"
+            initial={{ opacity: 0, y: -8, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -6, scale: 0.98, transition: EXIT_FAST }}
+            transition={SPRING_POP}
+          >
+            <div className="db-pop-head">
+              <div>
+                <h3>Cleanup Queue</h3>
+                <span className="db-pop-total tnum">{items.length > 0 ? `${bytes(total)} staged` : "Nothing staged"}</span>
+              </div>
+              <button type="button" className="db-pop-close" onClick={onClose} aria-label="Close">
+                <XIcon size={15} />
               </button>
             </div>
-          )}
-          {items.length === 0 ? (
-            <div className="db-pop-empty">
-              <span className="db-pop-empty-icon">
-                <Trash2Icon size={24} />
-              </span>
-              <p>Nothing staged yet — pick folders or files you want gone, then commit them in one move.</p>
+            <div className="db-pop-actions">
+              <button type="button" className="db-btn-clear" disabled={items.length === 0} onClick={clear}>
+                Clear
+              </button>
+              <button
+                type="button"
+                className="db-btn-commit"
+                disabled={items.length === 0 || committing || overFreeCap || scanRunning}
+                title={
+                  overFreeCap
+                    ? `Free tier caps cleanup at ${bytes(freeCap)} — activate DiskBytes Pro to clean more`
+                    : scanRunning
+                      ? "Wait for the scan to finish — cleaning needs a settled map"
+                      : undefined
+                }
+                onClick={() => setConfirming(true)}
+              >
+                <Trash2Icon size={14} />
+                {committing ? "Moving…" : `Move to ${BIN_NAME}…`}
+              </button>
             </div>
-          ) : (
-            <div className="db-pop-list db-scroll">
-              {items.map((i) => (
-                <div key={`${i.id}:${i.path}`} className="db-pop-row">
-                  <Trash2Icon size={14} />
-                  <div className="db-pop-item">
-                    <TailPath path={i.path} className="db-pop-path" />
-                    <small>{i.reason}</small>
+            {failure && (
+              <div className="db-pop-failed" role="alert">
+                <strong>{failure.error ? "Commit failed" : `Couldn’t recycle ${failure.count} item(s)`}</strong>
+                {failure.error ? (
+                  <p style={{ margin: 0, fontSize: 11 }}>{failure.error}</p>
+                ) : (
+                  <ul>
+                    {failure.failed.slice(0, 8).map((f) => (
+                      <li key={f.path} title={f.path}>
+                        {f.reason} — {f.path}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <button
+                  type="button"
+                  className="db-outline compact" style={{ marginTop: 8 }}
+                  onClick={() => setFailure(null)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+            {items.length === 0 ? (
+              <div className="db-pop-empty">
+                <span className="db-pop-empty-icon">
+                  <Trash2Icon size={24} />
+                </span>
+                <p>Nothing staged yet — pick folders or files you want gone, then commit them in one move.</p>
+              </div>
+            ) : (
+              <div className="db-pop-list db-scroll">
+                {items.map((i) => (
+                  <div key={`${i.id}:${i.path}`} className="db-pop-row">
+                    <Trash2Icon size={14} />
+                    <div className="db-pop-item">
+                      <TailPath path={i.path} className="db-pop-path" />
+                      <small>{i.reason}</small>
+                    </div>
+                    <b className="tnum">{bytes(i.size)}</b>
+                    <button
+                      type="button"
+                      className="db-pop-remove"
+                      aria-label={`Remove ${i.path}`}
+                      onClick={() => remove(i.id, i.path)}
+                    >
+                      <XIcon size={13} />
+                    </button>
                   </div>
-                  <b className="tnum">{bytes(i.size)}</b>
-                  <button
-                    type="button"
-                    className="db-pop-remove"
-                    aria-label={`Remove ${i.path}`}
-                    onClick={() => remove(i.id, i.path)}
-                  >
-                    <XIcon size={13} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </motion.div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        )}
       </AnimatePresence>
 
-      {confirming && (
+      {open && confirming && (
         <div className="db-scrim" role="dialog" aria-modal="true">
           <div className="db-dialog" ref={confirmRef}>
             <h3>Move {items.length.toLocaleString()} item{items.length === 1 ? "" : "s"} to the {BIN_NAME}?</h3>
@@ -248,13 +257,12 @@ export function CleanupQueuePopover({
               <CheckIcon size={12} /> Open {BIN_NAME}
             </button>
             <div className="db-dialog-actions">
-              <button type="button" className="db-outline" style={{ width: "auto", padding: "0 16px" }} onClick={() => setConfirming(false)}>
+              <button type="button" className="db-outline auto" onClick={() => setConfirming(false)}>
                 Cancel
               </button>
               <button
                 type="button"
-                className="db-ink-button"
-                style={{ width: "auto", padding: "0 18px", background: "var(--used)" }}
+                className="db-ink-button auto danger"
                 disabled={committing}
                 onClick={() => void doCommit()}
               >

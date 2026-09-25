@@ -25,9 +25,16 @@ export interface ArrowNavConfig {
 }
 
 function overlayOpen(): boolean {
+  // Modal-surface detection. `[class*="overlay"]` used to match the
+  // canvas's own `.db-overlay-canvas` (the hover/selection ring layer,
+  // mounted in EVERY canvas mode) — arrow keys were permanently
+  // suppressed right after canvas keyboard nav was added. The
+  // :not(canvas) exclusion keeps the semantic intent (DOM overlays
+  // block nav) without false-positive-matching a canvas element; the
+  // explicit role checks remain the primary signal.
   return Boolean(
     document.querySelector(
-      '[role="menu"], [role="dialog"], [class*="overlay"], [class*="popover"], [class*="modal"]',
+      '[role="menu"], [role="dialog"], [class*="overlay"]:not(canvas), [class*="popover"], [class*="modal"]',
     ),
   );
 }

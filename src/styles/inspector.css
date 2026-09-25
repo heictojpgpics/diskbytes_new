@@ -63,7 +63,7 @@
 .db-path {
   margin: 15px 0 8px;
   color: var(--text-secondary);
-  font: 10px/1.55 var(--font-mono);
+  font: 10.5px/1.5 var(--font-mono);
   /* Truncation is JS-side: <TailPath> middle-ellipsizes with the
    * element's OWN computed font (canvas-measured, letter-spacing
    * aware) — the shared, always-accurate path fitter. The old CSS
@@ -118,8 +118,8 @@
   justify-content: space-between;
   margin-bottom: 9px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-tertiary);
+  letter-spacing: 0.09em;
+  color: var(--text-secondary);
   font-size: 10.5px;
   font-weight: 700;
 }
@@ -229,7 +229,7 @@
 }
 .db-cleanup.is-staged {
   background: var(--free);
-  color: #fff;
+  color: var(--on-free);
   box-shadow: 0 2px 8px rgba(52, 199, 89, 0.3);
 }
 .db-cleanup.is-staged:hover {

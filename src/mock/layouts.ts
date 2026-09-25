@@ -26,6 +26,7 @@ const AGE_COLORS = [0x34d399, 0x60a5fa, 0x818cf8, 0xa78bfa, 0xf472b6, 0xf87171];
 
 const DIR_BIT = 1 << 3;
 const KIND_RECT = 0;
+const KIND_HEADER = 4;
 const KIND_ARC = 1;
 const KIND_CIRCLE = 2;
 const KIND_DOT = 3;
@@ -200,29 +201,55 @@ function squarify(
       // By-folder family: assigned at the effective branch root's
       // children, inherited by descendants; shade varies by depth +
       // sibling index (spec: one pastel family per top-level branch).
-      if (r[2] >= 6 && r[3] >= 6) {
+      const cellRgba =
+        (colorFor(n, fam.get(c.node) ?? 0, depth, colorMode, now, values.indexOf(c)) << 8) | 0xff;
+      if (n.isDir) {
+        // PARITY with Rust treemap.rs: dirs that can afford a title band
+        // emit a HEADER strip (kind 4) + children shifted below — NOT a
+        // full-rect. The old mock drew the folder as a plain RECT, so
+        // dev/CI screenshots never exercised the production HEADER
+        // render path (the blank-band bug hid behind exactly this
+        // divergence). Header constants mirror treemap.rs: 14px band,
+        // min 42×26.
+        const hasHdr = r[2] >= 42 && r[3] >= 26;
+        const hdr = hasHdr ? 14 : 0;
+        if (hasHdr) {
+          out.push({
+            id: c.node,
+            depth,
+            flags: DIR_BIT | KIND_HEADER,
+            rgba: cellRgba,
+            g: [r[0], r[1], r[2], 14, 0],
+          });
+        } else if (r[2] >= 6 && r[3] >= 6) {
+          out.push({ id: c.node, depth, flags: DIR_BIT | KIND_RECT, rgba: cellRgba, g: [r[0], r[1], r[2], r[3], 0] });
+        }
+        const kids = childrenSorted(tree, c.node);
+        const recurse = depth < maxDepth && kids.length > 0;
+        if (recurse) {
+          squarify(
+            kids,
+            [r[0] + 1, r[1] + hdr, Math.max(0, r[2] - 2), Math.max(0, r[3] - hdr - 1)],
+            out,
+            tree,
+            depth + 1,
+            maxDepth,
+            fam,
+            colorMode,
+            now,
+          );
+        } else if (hasHdr && r[2] >= 6 && r[3] - hdr >= 6) {
+          // Rust parity: no recursion → the body renders as a plain rect.
+          out.push({ id: c.node, depth, flags: DIR_BIT | KIND_RECT, rgba: cellRgba, g: [r[0], r[1] + hdr, r[2], r[3] - hdr, 0] });
+        }
+      } else if (r[2] >= 6 && r[3] >= 6) {
         out.push({
           id: c.node,
           depth,
-          flags: (n.isDir ? DIR_BIT : 0) | KIND_RECT,
-          rgba:
-            (colorFor(n, fam.get(c.node) ?? 0, depth, colorMode, now, values.indexOf(c)) << 8) | 0xff,
+          flags: KIND_RECT,
+          rgba: cellRgba,
           g: [r[0], r[1], r[2], r[3], 0],
         });
-      }
-      if (n.isDir && depth < maxDepth) {
-        const hdr = depth === 0 ? 15 : 12;
-        squarify(
-          childrenSorted(tree, c.node),
-          [r[0] + 1, r[1] + hdr, Math.max(0, r[2] - 2), Math.max(0, r[3] - hdr - 1)],
-          out,
-          tree,
-          depth + 1,
-          maxDepth,
-          fam,
-          colorMode,
-          now,
-        );
       }
       off += cLen;
     }

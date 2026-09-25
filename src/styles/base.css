@@ -49,8 +49,8 @@ button:focus-visible,
 input:focus-visible,
 a:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
   border-radius: var(--radius-xs);
 }
 
@@ -147,12 +147,131 @@ kbd {
   opacity: 0.45;
   animation: db-spin 1.55s linear infinite reverse;
 }
-@media (prefers-reduced-motion: reduce) {
-  .db-spinner .db-spin-arc {
-    animation: db-spin 1.6s linear infinite;
+
+/* ── Loading system v2 ──────────────────────────────────────────────────
+ * One language for every wait: the dual-arc spinner is the universal
+ * indeterminate MARK; skeletons are the STRUCTURE preview (list/table
+ * loads keep their header and row rhythm instead of collapsing to a
+ * spinner-in-a-void); the scan visual remains the hero treatment.
+ * Rhythm: spinner 0.92s, shimmer 1.38s, strip 1.15s — one harmonic
+ * family, so concurrent loaders read as a chorus, not a quarrel. */
+
+/* Skeleton block: theme-aware placeholder that RESERVES the real
+ * element's footprint. transform-only shimmer (compositor thread);
+ * 130° band so the highlight never reads as a hard edge sweeping. */
+@keyframes db-shimmer {
+  to {
+    transform: translateX(200%);
   }
-  .db-spinner .db-spin-arc-rev {
-    animation: none;
+}
+.db-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--skeleton);
+  border-radius: var(--radius-xs);
+}
+.db-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(100deg, transparent 25%, var(--shimmer) 50%, transparent 75%);
+  transform: translateX(-100%);
+  animation: db-shimmer 1.38s var(--ease-in-out) infinite;
+  will-change: transform;
+}
+/* Text-line skeletons: rounded like type, height on the body scale. */
+.db-skeleton.text {
+  height: 11px;
+  border-radius: 999px;
+}
+.db-skeleton.text-strong {
+  height: 13px;
+  border-radius: 999px;
+}
+/* Row anatomy: avatar/icon square + two text lines + right meta. */
+.db-skeleton-row {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+.db-skeleton-row .db-skeleton-ico {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-s);
+}
+.db-skeleton-row .db-skeleton-lines {
+  display: grid;
+  gap: 7px;
+}
+.db-skeleton-row .db-skeleton-lines .db-skeleton {
+  height: 11px;
+}
+.db-skeleton-row .db-skeleton-lines .db-skeleton:first-child {
+  height: 12px;
+  width: 62%;
+}
+.db-skeleton-row .db-skeleton-lines .db-skeleton:nth-child(2) {
+  width: 38%;
+  opacity: 0.7;
+}
+.db-skeleton-row .db-skeleton-meta {
+  width: 64px;
+  height: 10px;
+  border-radius: 999px;
+  opacity: 0.8;
+}
+/* Stagger: each row's shimmer starts a beat later (rows fill like a
+ * wave — premium detail that reads as deliberate, not decorative).
+ * The delay sits on ::after; rows beyond the 8th reuse the last beat. */
+.db-skeleton-row:nth-child(2) .db-skeleton::after { animation-delay: 90ms; }
+.db-skeleton-row:nth-child(3) .db-skeleton::after { animation-delay: 180ms; }
+.db-skeleton-row:nth-child(4) .db-skeleton::after { animation-delay: 270ms; }
+.db-skeleton-row:nth-child(5) .db-skeleton::after { animation-delay: 360ms; }
+.db-skeleton-row:nth-child(6) .db-skeleton::after { animation-delay: 450ms; }
+.db-skeleton-row:nth-child(7) .db-skeleton::after { animation-delay: 540ms; }
+.db-skeleton-row:nth-child(8) .db-skeleton::after { animation-delay: 630ms; }
+
+/* db-loading-block v2: the centered spinner block stays for waits with
+ * NO predictable structure (IPC round trips of unknown shape) — but it
+ * now breathes as one unit instead of a glyph on a blank void. */
+.db-loading-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.db-loading-block > span {
+  animation: db-loading-pulse 1.6s var(--ease-in-out) infinite;
+}
+@keyframes db-loading-pulse {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* ESSENTIAL-MOTION EXCEPTION (deliberate, documented):
+   * the blanket kill switch further below would freeze the spinner
+   * arcs mid-gesture — a static partial arc reads as a STALLED app,
+   * the opposite of the preference's intent. A slow single-direction
+   * linear spin is the accepted accessible idiom for indeterminate
+   * progress (WCAG 2.2 understands "essential" loops; timing is
+   * linearized, the decorative counter-arc is dropped, the shimmer
+   * and pulse go static). This rule MUST stay below the per-spinner
+   * defaults and above the global switch: same !important weight as
+   * the switch, higher specificity — source order settles it. */
+  .db-spinner .db-spin-arc {
+    animation: db-spin 1.6s linear infinite !important;
+  }
+  .db-spinner .db-spin-arc-rev,
+  .db-skeleton::after,
+  .db-loading-block > span {
+    animation: none !important;
   }
 }
 

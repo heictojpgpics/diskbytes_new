@@ -30,6 +30,7 @@ import { CANVAS_MODES } from "../state/vizUi";
 import { getHoverDetails } from "../viz/layoutIpc";
 import { getNodeDetails, type NodeDetailsData } from "../viz/exploreIpc";
 import { EVENTS, track } from "../lib/analytics";
+import { FADE_SWAP } from "../lib/motion";
 
 /** Smoothly-rolling "N files · X GB" live counter (motion values, no
  * per-tick React re-render churn — the 150 ms IPC ticks TWEEN into each
@@ -66,6 +67,7 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
   const stage = useCleanupStore((s) => s.stage);
 
   const chip = useRef<HoverChipHandle>(null);
+  const hoverSeq = useRef(0);
   const [menu, setMenu] = useState<ItemMenuState | null>(null);
   const [folderView, setFolderView] = useState<NodeDetailsData | null>(null);
 
@@ -109,12 +111,18 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
   const hoverFetch = useCallback(
     (id: number | null, x: number, y: number) => {
       if (id == null || id < 0) {
+        hoverSeq.current += 1; // in-flight fetches are now stale
         chip.current?.hide();
         return;
       }
       chip.current?.move(x, y);
+      // Sequence guard: hovering A→B quickly lets A's async details
+      // resolve LAST and paint A's data under B's pointer. Only the
+      // NEWEST hover may show.
+      const seq = ++hoverSeq.current;
       void (async () => {
         const d = await getHoverDetails(generation, id).catch(() => null);
+        if (seq !== hoverSeq.current) return; // superseded by a newer hover/hide
         if (d) chip.current?.show(
           {
             name: d.name,
@@ -209,8 +217,7 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
           <div className="db-state-actions">
             <button
               type="button"
-              className="db-ink-button"
-              style={{ width: "auto", padding: "0 20px" }}
+              className="db-ink-button auto"
               onClick={() => {
                 track(EVENTS.scanStarted, { target: "ThisPC" });
                 void useScanStore.getState().startScan("ThisPC");
@@ -220,8 +227,7 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
             </button>
             <button
               type="button"
-              className="db-outline"
-              style={{ width: "auto", padding: "0 18px" }}
+              className="db-outline auto"
               onClick={async () => {
                 try {
                   const { open } = await import("@tauri-apps/plugin-dialog");
@@ -248,13 +254,15 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
     return (
       <div className="db-main">
         <div className="db-state db-scanning">
-          {/* Premium radial disk sweep (transform-only CSS, 60 fps) */}
+          {/* Premium radial disk sweep v2 (transform-only CSS, 60 fps):
+           * main orbit + faint counter-rotating outer tail + breathing core. */}
           <div className="db-scan-visual" aria-hidden="true">
             {/* Two guide rings (anchor + texture); a third at r=30 sat
              * inside the core's pulse-glow radius and shimmered every
              * 2.4 s cycle — removed rather than crowded. */}
             <span className="db-scan-ring r1" />
             <span className="db-scan-ring r2" />
+            <span className="db-scan-sweep2" />
             <span className="db-scan-sweep" />
             <span className="db-scan-core">
               <HardDriveIcon size={22} />
@@ -281,8 +289,7 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
           <div className="db-state-actions">
             <button
               type="button"
-              className="db-ink-button"
-              style={{ width: "auto", padding: "0 18px" }}
+              className="db-ink-button auto"
               onClick={() => {
                 if (elevation) {
                   void invoke("restart_as_admin", { scanTarget, turbo: true }).catch(() => undefined);
@@ -337,7 +344,7 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
           className="db-stage-swap"
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.15, ease: "easeOut" }}
+          transition={FADE_SWAP}
         >
           {mode === "Folders" && (
             <FoldersMode

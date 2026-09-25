@@ -7,7 +7,7 @@
  * hook §15 — CI screenshot tours).
  */
 import { useCallback, useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 
 import { TopBar } from "./shell/TopBar";
 import { Sidebar } from "./sidebar";
@@ -30,6 +30,7 @@ import { pushRecent } from "./sidebar/RecentSection";
 import { TourDriver } from "./shell/TourDriver";
 import { AppErrorBoundary } from "./shell/AppErrorBoundary";
 import { CheckIcon, ShieldIcon, Trash2Icon } from "./components/Icon";
+import { SPRING_TOAST } from "./lib/motion";
 import { listen } from "./lib/ipc";
 import "./theme/tokens.css";
 import "./styles/base.css";
@@ -236,7 +237,7 @@ function AppShell() {
             initial={{ opacity: 0, y: 18, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 10, scale: 0.97 }}
-            transition={{ type: "spring", stiffness: 420, damping: 32 }}
+            transition={SPRING_TOAST}
           >
             {toastIcon === "trash" ? <Trash2Icon size={15} /> : toastIcon === "shield" ? <ShieldIcon size={15} /> : <CheckIcon size={15} />}
             {toast}
@@ -252,7 +253,13 @@ function AppShell() {
 export default function App() {
   return (
     <AppErrorBoundary>
-      <AppShell />
+      {/* reducedMotion="user": the CSS kill switch only covers
+       * stylesheet animations — every framer spring (tab pill, badge,
+       * toast, popover) ran regardless of the OS preference. This makes
+       * the JS motion system honor it too (springs become instant). */}
+      <MotionConfig reducedMotion="user">
+        <AppShell />
+      </MotionConfig>
     </AppErrorBoundary>
   );
 }

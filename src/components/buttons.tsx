@@ -127,3 +127,51 @@ export function Spinner({ size = 22, weight = 2.6 }: { size?: number; weight?: n
     </svg>
   );
 }
+
+/* ── Loading system v2: structure previews (skeletons) ──────────────────
+ * Waits with a PREDICTABLE shape get a skeleton that reserves the real
+ * layout: no collapse-to-void, no reflow jump when data lands. Waits of
+ * unknown shape keep <Spinner> + <LoadingBlock>. Both share the
+ * harmonized rhythm documented in base.css. */
+
+/** Generic skeleton block (w/h accept px numbers or CSS strings;
+ * rectangular unless `pill`). */
+export function Skeleton({ w, h, pill, className }: { w?: number | string; h?: number | string; pill?: boolean; className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`db-skeleton ${pill ? "text" : ""} ${className ?? ""}`}
+      style={{ width: w, height: h }}
+    />
+  );
+}
+
+/** N placeholder rows with the app's list anatomy (icon tile + title +
+ * meta line + right-aligned size). Drop-in for virtualized/plain lists
+ * while the first page of data loads. */
+export function SkeletonRows({ rows = 8, className }: { rows?: number; className?: string }) {
+  return (
+    <div className={className} aria-hidden="true">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="db-skeleton-row">
+          <span className="db-skeleton db-skeleton-ico" />
+          <span className="db-skeleton-lines">
+            <span className="db-skeleton" />
+            <span className="db-skeleton" />
+          </span>
+          <span className="db-skeleton db-skeleton-meta" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Centered spinner + pulsing label — for waits of unknown shape. */
+export function LoadingBlock({ label, spinnerSize = 22 }: { label: string; spinnerSize?: number }) {
+  return (
+    <div className="db-loading-block" role="status">
+      <Spinner size={spinnerSize} />
+      <span>{label}</span>
+    </div>
+  );
+}

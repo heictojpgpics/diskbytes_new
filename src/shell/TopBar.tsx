@@ -20,6 +20,7 @@ import { useTheme } from "../theme/useTheme";
 import { bytes as formatBytes } from "../lib/format";
 import type { CrumbData } from "../viz/exploreIpc";
 import { CaptionButtons, useWindowControls } from "./TitleBar";
+import { SPRING_UI } from "../lib/motion";
 
 const TABS: { id: TabId; label: string; Icon: typeof LayoutGridIcon }[] = [
   { id: "explore", label: "Explore", Icon: LayoutGridIcon },
@@ -64,6 +65,10 @@ export function TopBar(props: TopBarProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        // Don't steal focus from a modal surface (the license key input,
+        // dialogs, menus) — the old unconditional focus grabbed typing
+        // out of the license field mid-keystroke.
+        if (document.querySelector("[role='dialog'][aria-modal='true'], .db-scrim, [role='menu']")) return;
         e.preventDefault();
         searchRef.current?.focus();
       }
@@ -115,7 +120,7 @@ export function TopBar(props: TopBarProps) {
             aria-label={label}
             title={label}
           >
-            {tab === id && <motion.span layoutId="db-tab-pill" className="db-tab-pill" transition={{ type: "spring", stiffness: 480, damping: 38 }} />}
+            {tab === id && <motion.span layoutId="db-tab-pill" className="db-tab-pill" transition={SPRING_UI} />}
             <Icon size={15} />
             <span className="db-tab-label">{label}</span>
           </button>
@@ -187,6 +192,8 @@ export function TopBar(props: TopBarProps) {
         onClick={props.onOpenQueue}
         title="Cleanup Queue"
         data-open={props.queueOpen}
+        aria-haspopup="dialog"
+        aria-expanded={props.queueOpen}
       >
         <Trash2Icon size={15} />
         <span className="db-queue-label">Cleanup</span>
@@ -197,7 +204,7 @@ export function TopBar(props: TopBarProps) {
               initial={{ scale: 0.4, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.4, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 500, damping: 26 }}
+              transition={SPRING_UI}
             >
               {itemCount}
             </motion.b>

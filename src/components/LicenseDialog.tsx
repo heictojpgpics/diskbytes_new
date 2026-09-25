@@ -53,13 +53,13 @@ export function LicenseDialog({ open, onClose }: { open: boolean; onClose: () =>
               <div><CheckIcon size={13} /> Snapshots & live monitor</div>
             </div>
             <div className="db-dialog-actions">
-              <button type="button" className="db-outline" style={{ width: "auto", padding: "0 14px" }} disabled={busy} onClick={() => void validateNow()}>
+              <button type="button" className="db-outline auto" disabled={busy} onClick={() => void validateNow()}>
                 Validate now
               </button>
-              <button type="button" className="db-outline danger" style={{ width: "auto", padding: "0 14px" }} disabled={busy} onClick={() => void deactivate()}>
+              <button type="button" className="db-outline danger auto" disabled={busy} onClick={() => void deactivate()}>
                 Deactivate
               </button>
-              <button type="button" className="db-ink-button" style={{ width: "auto", padding: "0 18px" }} onClick={onClose}>
+              <button type="button" className="db-ink-button auto" onClick={onClose}>
                 Done
               </button>
             </div>
@@ -89,13 +89,12 @@ export function LicenseDialog({ open, onClose }: { open: boolean; onClose: () =>
               </div>
             </div>
             <div className="db-dialog-actions">
-              <button type="button" className="db-outline" style={{ width: "auto", padding: "0 14px" }} onClick={onClose}>
+              <button type="button" className="db-outline auto" onClick={onClose}>
                 Later
               </button>
               <button
                 type="button"
-                className="db-ink-button"
-                style={{ width: "auto", padding: "0 18px" }}
+                className="db-ink-button auto"
                 disabled={busy || key.trim().length === 0}
                 onClick={() => void activate(key.trim())}
               >

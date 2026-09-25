@@ -38,15 +38,27 @@ export const MODE_CAPTIONS: Record<Mode, string> = {
 
 export type ColorMode = "by-folder" | "by-type" | "by-age";
 
+/** Top Sizes scope (persisted per-run: switching modes/tabs and coming
+ * back used to reset it to "In this folder" — the user's chosen lens
+ * should survive a round-trip). */
+export type TopScope = "in-folder" | "files-anywhere" | "folders-anywhere";
+
 interface VizUiState {
   mode: Mode;
   colorMode: ColorMode;
   depth: number;
   abbreviate: boolean;
+  topScope: TopScope;
+  /** Depth memory PER MODE: depth semantics differ by engine (depth 9
+   * renders hairline sunburst rings but a rich treemap). Switching
+   * Sunburst→Treemap used to inherit sunburst's cramped depth — each
+   * mode now recalls the depth the user last used with IT. */
+  modeDepths: Partial<Record<Mode, number>>;
   setMode: (mode: Mode) => void;
   setColorMode: (colorMode: ColorMode) => void;
   setDepth: (depth: number) => void;
   setAbbreviate: (on: boolean) => void;
+  setTopScope: (scope: TopScope) => void;
 }
 
 /** Dev-hook seeding (§15 DISKBYTES_MODE). */
@@ -56,13 +68,28 @@ function seedMode(): Mode {
   return "Folders";
 }
 
-export const useVizUiStore = create<VizUiState>((set) => ({
+export const useVizUiStore = create<VizUiState>((set, get) => ({
   mode: seedMode(),
   colorMode: "by-folder",
   depth: 7,
   abbreviate: false,
-  setMode: (mode) => set({ mode }),
+  topScope: "in-folder",
+  modeDepths: {},
+  setMode: (mode) => {
+    // Persist the OUTGOING mode's current depth BEFORE switching: the
+    // restore only worked after the user had touched the slider in the
+    // target mode once — a first switch to an unvisited mode inherited
+    // the previous mode's depth (Sunburst@9 → Treemap still @9).
+    const prev = get().mode;
+    const modeDepths = { ...get().modeDepths, [prev]: get().depth };
+    const remembered = modeDepths[mode];
+    set({ mode, modeDepths, ...(remembered != null ? { depth: remembered } : {}) });
+  },
   setColorMode: (colorMode) => set({ colorMode }),
-  setDepth: (depth) => set({ depth: Math.min(10, Math.max(2, Math.round(depth))) }),
+  setDepth: (depth) => {
+    const d = Math.min(10, Math.max(2, Math.round(depth)));
+    set({ depth: d, modeDepths: { ...get().modeDepths, [get().mode]: d } });
+  },
   setAbbreviate: (abbreviate) => set({ abbreviate }),
+  setTopScope: (topScope) => set({ topScope }),
 }));

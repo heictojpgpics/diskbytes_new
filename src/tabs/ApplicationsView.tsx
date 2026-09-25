@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AppWindowIcon, CheckIcon, PackageOpenIcon, RefreshCwIcon, Trash2Icon, ShieldIcon } from "../components/Icon";
 import { TailPath } from "../components/TailPath";
-import { EmptyState, Spinner } from "../components/buttons";
+import { EmptyState, SkeletonRows } from "../components/buttons";
 import { useFocusTrap } from "../lib/useFocusTrap";
 import { bytes, relativeAge } from "../lib/format";
 import { invoke } from "../lib/ipc";
@@ -97,7 +97,7 @@ export function ApplicationsView() {
           </span>
         </div>
         <div className="db-tab-head-actions">
-          <button type="button" className="db-outline" style={{ width: "auto", padding: "0 16px" }} disabled={busy} onClick={() => void load(true)}>
+          <button type="button" className="db-outline auto" disabled={busy} onClick={() => void load(true)}>
             <RefreshCwIcon size={14} /> Refresh
           </button>
         </div>
@@ -120,8 +120,7 @@ export function ApplicationsView() {
           </ul>
           <button
             type="button"
-            className="db-outline compact danger"
-            style={{ marginTop: 8, width: "auto", padding: "0 12px" }}
+            className="db-outline compact danger" style={{ marginTop: 8 }}
             onClick={() => void invoke("restart_as_admin", { scanTarget: "ThisPC", turbo: false }).catch(() => undefined)}
           >
             <ShieldIcon size={13} /> Restart as administrator
@@ -130,10 +129,14 @@ export function ApplicationsView() {
       )}
 
       {busy && !apps && (
-        <div className="db-loading-block">
-          <Spinner />
-          <span>Listing registry + Store apps, measuring sizes…</span>
-        </div>
+        // Structure preview (loading system v2): app-row skeletons keep
+        // the table's rhythm instead of collapsing to a spinner-in-a-void.
+        <>
+          <SkeletonRows rows={7} className="db-tab-skeleton" />
+          <div className="db-loading-block" role="status">
+            <span>Listing registry + Store apps, measuring sizes…</span>
+          </div>
+        </>
       )}
 
       {sorted.map((app) => {
@@ -164,7 +167,6 @@ export function ApplicationsView() {
               <button
                 type="button"
                 className="db-outline compact db-app-uninstall"
-                style={{ width: "auto" }}
                 onClick={() => setConfirm(app)}
               >
                 Uninstall
@@ -172,8 +174,7 @@ export function ApplicationsView() {
             </div>
             <button
               type="button"
-              className="db-outline compact"
-              style={{ marginTop: 9, width: "auto", padding: "0 10px" }}
+              className="db-outline compact" style={{ marginTop: 9, padding: "0 10px" }}
               onClick={() => setExpanded((s) => (s.has(app.id) ? new Set([...s].filter((x) => x !== app.id)) : new Set([...s, app.id])))}
             >
               {isOpen ? "Hide" : "Show"} breakdown{leftoversTotal > 0 ? ` · ${bytes(leftoversTotal)} leftovers` : ""}
@@ -227,18 +228,17 @@ export function ApplicationsView() {
               {" "}Running the app’s own uninstaller keeps the registry and installer state intact — program files are never trashed directly.
             </p>
             <div className="db-dialog-actions">
-              <button type="button" className="db-outline" style={{ width: "auto", padding: "0 14px" }} onClick={() => setConfirm(null)}>
+              <button type="button" className="db-outline auto" onClick={() => setConfirm(null)}>
                 Cancel
               </button>
               {confirm.leftovers.length > 0 && (
-                <button type="button" className="db-outline" style={{ width: "auto", padding: "0 14px" }} onClick={() => stageLeftovers(confirm)}>
+                <button type="button" className="db-outline auto" onClick={() => stageLeftovers(confirm)}>
                   <Trash2Icon size={13} /> Stage leftovers only
                 </button>
               )}
               <button
                 type="button"
-                className="db-ink-button"
-                style={{ width: "auto", padding: "0 16px" }}
+                className="db-ink-button auto"
                 disabled={uninstalling}
                 onClick={() => void runUninstall(confirm)}
               >

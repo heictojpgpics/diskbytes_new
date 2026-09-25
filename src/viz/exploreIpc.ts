@@ -136,6 +136,8 @@ export interface ListRowData {
   hasChildren: boolean;
   share: number;
   size: number;
+  /** Direct children count (folders; files report 0) — the Items column. */
+  items: number;
   category: string;
   color: number;
   protected: boolean;

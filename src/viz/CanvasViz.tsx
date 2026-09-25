@@ -6,6 +6,7 @@
  * and ResizeObserver are handled; hit-testing is local JS geometry.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useArrowNav } from "../lib/useArrowNav";
 import { bytes } from "../lib/format";
 import { abbreviate } from "./abbrev";
 import {
@@ -85,6 +86,15 @@ export function CanvasViz(props: CanvasVizProps) {
   const loadError = useRef<string | null>(null);
   const hoverCell = useRef<Cell | null>(null);
   const theme = useRef<ThemeColors>(readTheme());
+  // Paint support refs: layoutRef/namesRef let late repaints (theme
+  // flip, DPR migration) draw WITH labels without another IPC pass;
+  // paintToken cancels the previous async name-resolution before a new
+  // paint starts (an out-of-order .then could otherwise paint an OLD
+  // layout over a newer one — the mode-switch race).
+  const layoutRef = useRef<LayoutResult | null>(null);
+  const namesRef = useRef<Map<number, string>>(new Map());
+  const repaintRef = useRef<(() => void) | null>(null);
+  const paintTokenRef = useRef<{ cancelled: boolean }>({ cancelled: false });
 
   // ResizeObserver (debounced per settle — doc 05 §6). The FIRST
   // observation applies immediately: the debounce exists for resize
@@ -114,16 +124,51 @@ export function CanvasViz(props: CanvasVizProps) {
     };
   }, []);
 
-  // Theme tracking (repaint when data-theme flips)
+  // Theme tracking (repaint when data-theme flips). Subscribes ONCE —
+  // reads through refs. (The old effect had no dep array and
+  // re-subscribed a fresh MutationObserver on every render.)
   useEffect(() => {
     const obs = new MutationObserver(() => {
       theme.current = readTheme();
-      const s = staticRef.current;
-      if (s && layout) paint(s, layout, props);
+      repaintRef.current?.();
     });
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => obs.disconnect();
-  });
+  }, []);
+
+  // DPR migration: dragging the window across a monitor with a
+  // different scale leaves the backing store at the old ratio — every
+  // stroke stays blurry until the next layout change. Watch a
+  // resolution media query and repaint. The query is REBUILT on every
+  // change event: a query matches the CURRENT dppx, so a stale query
+  // only fires once (1×→2×) and would miss 2×→3× — re-arming after
+  // each event tracks any number of migrations.
+  useEffect(() => {
+    let mq: MediaQueryList | null = null;
+    const arm = () => {
+      mq?.removeEventListener("change", onChange);
+      mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      mq.addEventListener("change", onChange);
+    };
+    const onChange = () => {
+      repaintRef.current?.();
+      arm();
+    };
+    arm();
+    return () => {
+      mq?.removeEventListener("change", onChange);
+    };
+  }, []);
+
+  // Canvas (re)mount repaint: the canvases unmount below 40px and
+  // remount above; if the size returns to the EXACT same w×h, the
+  // layout cache-hit returns the identical object, `setLayout` bails
+  // and the paint effect never re-runs — the fresh canvas would stay
+  // blank (pointer hit-testing kept working; only the paint was lost).
+  const canvasMounted = size.w >= 40 && size.h >= 40;
+  useEffect(() => {
+    if (canvasMounted) repaintRef.current?.();
+  }, [canvasMounted]);
 
   // Layout fetch
   const reqKey = `${generation}:${node}:${mode}:${size.w}x${size.h}:${depth}:${colorMode}`;
@@ -161,10 +206,14 @@ export function CanvasViz(props: CanvasVizProps) {
       }
       // Batch-fetch labels for the biggest cells (spec: get_names batched).
       // Synthetic group cells resolve client-side from the group legend.
-      await resolveNames(generation, res.cells, res.meta.groups, mode).catch(
+      // The resolved map is KEPT (namesRef) so the static paint draws
+      // labels in its FIRST pass — no labelless first frame, no label
+      // pop-in flicker, no second full-scene paint.
+      const names = await resolveNames(generation, res.cells, res.meta.groups, mode).catch(
         () => new Map<number, string>(),
       );
       if (disposed) return;
+      namesRef.current = names;
       setLayout(res);
     })();
     return () => {
@@ -180,52 +229,90 @@ export function CanvasViz(props: CanvasVizProps) {
   }, [layout]);
 
   // ── Static paint (once per layout) ─────────────────────────────────
+  // NOT keyed on selectedId: drawCells never reads it — the selection
+  // ring lives on the overlay canvas. The old dep triggered a full
+  // double-paint (plus a names IPC lookup) on every click.
   useEffect(() => {
     const s = staticRef.current;
     if (!s || !layout || size.w < 40) return;
-    paint(s, layout, props);
-    // Repaint when selection changes (a user action, not hover).
+    layoutRef.current = layout;
+    paintTokenRef.current.cancelled = true;
+    const token = { cancelled: false };
+    paintTokenRef.current = token;
+    const run = () => paint(s, layout, props, namesRef.current, token);
+    repaintRef.current = run;
+    run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layout, props.selectedId, props.abbreviateLabels]);
+  }, [layout, props.abbreviateLabels]);
 
   // ── Overlay: hover + selection rings ───────────────────────────────
-  const paintOverlay = useCallback(() => {
-    const o = overlayRef.current;
-    if (!o || !layout) return;
-    const dpr = window.devicePixelRatio || 1;
-    if (o.width !== Math.round(size.w * dpr)) {
-      o.width = Math.round(size.w * dpr);
-      o.height = Math.round(size.h * dpr);
-    }
-    o.style.width = `${size.w}px`;
-    o.style.height = `${size.h}px`;
-    const ctx = o.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, size.w, size.h);
-    // selection ring (user action): coral outer stroke + a refined thin
-    // white inner stroke (reference's selected-cell double-ring).
-    const sel = props.selectedId != null ? cellsById.get(props.selectedId) : undefined;
-    if (sel) {
-      ctx.strokeStyle = "rgba(255,107,74,0.95)";
-      ctx.lineWidth = 2.5;
-      ringPath(ctx, sel, layout, mode);
-      ctx.strokeStyle = "rgba(255,255,255,0.85)";
-      ctx.lineWidth = 1;
-      ringPath(ctx, sel, layout, mode, 3);
-    }
-    // hover ring (overlay canvas only — never React state)
-    const hv = hoverCell.current;
-    if (hv && hv !== sel) {
-      ctx.strokeStyle = "rgba(29,29,31,0.85)";
-      ctx.lineWidth = 1.6;
-      ringPath(ctx, hv, layout, mode);
-    }
-  }, [layout, size, props.selectedId, cellsById, mode]);
+  // `ringAlpha` powers the 120 ms fade-in: rings used to appear as hard
+  // instant cuts — the only surface in the app without a transition.
+  // rAF-driven (the overlay is already ref-driven; no React state).
+  const paintOverlay = useCallback(
+    (ringAlpha = 1) => {
+      const o = overlayRef.current;
+      if (!o || !layout) return;
+      const dpr = window.devicePixelRatio || 1;
+      const bw = Math.round(size.w * dpr);
+      const bh = Math.round(size.h * dpr);
+      // Resize on width OR height change — a height-only change (sidebar
+      // wrap, banner) used to leave a stale backing-store height.
+      if (o.width !== bw || o.height !== bh) {
+        o.width = bw;
+        o.height = bh;
+      }
+      o.style.width = `${size.w}px`;
+      o.style.height = `${size.h}px`;
+      const ctx = o.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, size.w, size.h);
+      // selection ring (user action): coral outer stroke + a refined thin
+      // white inner stroke (reference's selected-cell double-ring).
+      const sel = props.selectedId != null ? cellsById.get(props.selectedId) : undefined;
+      if (sel) {
+        ctx.strokeStyle = `rgba(255,107,74,${0.95 * ringAlpha})`;
+        ctx.lineWidth = 2.5;
+        ringPath(ctx, sel, layout, mode);
+        ctx.strokeStyle = `rgba(255,255,255,${0.85 * ringAlpha})`;
+        ctx.lineWidth = 1;
+        ringPath(ctx, sel, layout, mode, 3);
+      }
+      // hover ring (overlay canvas only — never React state)
+      const hv = hoverCell.current;
+      if (hv && hv !== sel) {
+        ctx.strokeStyle = `rgba(29,29,31,${0.85 * ringAlpha})`;
+        ctx.lineWidth = 1.6;
+        ringPath(ctx, hv, layout, mode);
+      }
+    },
+    [layout, size, props.selectedId, cellsById, mode],
+  );
 
-  useEffect(() => {
-    paintOverlay();
+  // Ring fade-in (120 ms, ease-out). Skipped under reduced motion.
+  const ringAnim = useRef<number | null>(null);
+  const fadeRingsIn = useCallback(() => {
+    if (ringAnim.current != null) cancelAnimationFrame(ringAnim.current);
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      paintOverlay(1);
+      return;
+    }
+    const start = performance.now();
+    const step = (t: number) => {
+      const k = Math.min(1, (t - start) / 120);
+      paintOverlay(0.2 + 0.8 * (1 - (1 - k) * (1 - k))); // easeOutQuad from 0.2
+      if (k < 1) ringAnim.current = requestAnimationFrame(step);
+      else ringAnim.current = null;
+    };
+    ringAnim.current = requestAnimationFrame(step);
   }, [paintOverlay]);
+  useEffect(() => {
+    fadeRingsIn();
+    return () => {
+      if (ringAnim.current != null) cancelAnimationFrame(ringAnim.current);
+    };
+  }, [fadeRingsIn]);
 
   // ── Pointer events (refs only — no React state on move) ────────────
   useEffect(() => {
@@ -238,7 +325,7 @@ export function CanvasViz(props: CanvasVizProps) {
       const prev = hoverCell.current;
       if (cell?.id !== prev?.id) {
         hoverCell.current = cell;
-        paintOverlay();
+        fadeRingsIn();
         props.onHover(cell ? cell.id : null, e.clientX, e.clientY);
       } else if (cell) {
         props.onHover(cell.id, e.clientX, e.clientY);
@@ -247,7 +334,13 @@ export function CanvasViz(props: CanvasVizProps) {
     };
     const onLeave = () => {
       hoverCell.current = null;
-      paintOverlay();
+      // Cancel any in-flight fade before the full repaint — a pending
+      // rAF step would re-dim the selection ring for ~100 ms after.
+      if (ringAnim.current != null) {
+        cancelAnimationFrame(ringAnim.current);
+        ringAnim.current = null;
+      }
+      paintOverlay(1);
       props.onHover(null, 0, 0);
     };
     const onDown = (e: PointerEvent) => {
@@ -281,7 +374,34 @@ export function CanvasViz(props: CanvasVizProps) {
       s.removeEventListener("contextmenu", onCtx);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layout, mode, paintOverlay]);
+  }, [layout, mode, fadeRingsIn, paintOverlay]);
+
+  // ── Keyboard access (canvas parity with the DOM modes) ─────────────
+  // The 5 canvas modes had NO keyboard path — selection/open was
+  // pointer-only. Same contract as List/Folders: ↑/↓ walk the biggest
+  // cells (size-desc, capped like Top Sizes), Enter opens folders,
+  // and useArrowNav already suppresses while overlays are open.
+  const navCells = useMemo(() => {
+    if (!layout) return [] as Cell[];
+    const arr = layout.cells.filter(
+      (c) => c.id < SYNTH_BASE && (c.flags & 0b111) !== CELL_KIND.HEADER,
+    );
+    arr.sort((a, b) => b.size - a.size);
+    return arr.slice(0, 200);
+  }, [layout]);
+  useArrowNav({
+    count: navCells.length,
+    selectedId: props.selectedId,
+    idOf: (i) => navCells[i]?.id ?? -1,
+    onMove: (i) => {
+      const c = navCells[i];
+      if (c) props.onSelect(c.id);
+    },
+    onActivate: (i) => {
+      const c = navCells[i];
+      if (c && (c.flags & DIR_BIT) !== 0) props.onOpen(c.id);
+    },
+  });
 
   return (
     <div className="db-viz-wrap">
@@ -316,7 +436,10 @@ export function CanvasViz(props: CanvasVizProps) {
 /** Which cells deserve labels (bounded — spec ≤20k cells, label the big). */
 function labelable(c: Cell, mode: string): boolean {
   const kind = c.flags & 0b111;
-  if (kind === CELL_KIND.HEADER) return false;
+  // Header strips ARE the treemap's folder labels — the engine reserves
+  // the 14px band precisely to carry the name. Width-gated (the engine
+  // only emits headers ≥42px wide; the gate keeps group header parity).
+  if (kind === CELL_KIND.HEADER) return c.g[2] >= 42;
   if (mode === "treemap" || mode === "flame") {
     return c.g[2] >= 36 && c.g[3] >= 15;
   }
@@ -336,14 +459,32 @@ function labelable(c: Cell, mode: string): boolean {
   return false;
 }
 
-/** Paint the static layer. */
-function paint(canvas: HTMLCanvasElement, layout: LayoutResult, props: CanvasVizProps): void {
+/** Paint the static layer.
+ *
+ * Draws IN ONE PASS with `preloaded` names when available (the layout
+ * fetch resolves names before setLayout, so the common path carries
+ * every label on the first frame — no labelless flash, no pop-in).
+ * When names are missing (cold cache / IPC failure) it falls back to
+ * the async resolve + single redraw, guarded by `token` so a superseded
+ * paint can never draw an old layout over a newer one.
+ */
+function paint(
+  canvas: HTMLCanvasElement,
+  layout: LayoutResult,
+  props: CanvasVizProps,
+  preloaded: Map<number, string> | null,
+  token: { cancelled: boolean },
+): void {
   const dpr = window.devicePixelRatio || 1;
   const w = layout.meta.width;
   const h = layout.meta.height;
-  if (canvas.width !== Math.round(w * dpr)) {
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
+  const bw = Math.round(w * dpr);
+  const bh = Math.round(h * dpr);
+  // Resize on width OR height change — height-only changes (banner,
+  // sidebar wrap) used to leave a stale backing-store height.
+  if (canvas.width !== bw || canvas.height !== bh) {
+    canvas.width = bw;
+    canvas.height = bh;
   }
   canvas.style.width = `${w}px`;
   canvas.style.height = `${h}px`;
@@ -356,23 +497,54 @@ function paint(canvas: HTMLCanvasElement, layout: LayoutResult, props: CanvasViz
   const cx = layout.meta.center?.[0] ?? w / 2;
   const cy = layout.meta.center?.[1] ?? h / 2;
 
-  void resolveNames(layout.meta.generation, layout.cells, layout.meta.groups, mode).then(
-    (names) => {
-      // Names resolve async — repaint with them (still once per settle).
-      // Sunburst also gets its root name for the center disc.
-      if (mode === "sunburst" && !names.has(layout.meta.node)) {
-        void getNames(layout.meta.generation, [layout.meta.node]).then((root) => {
-          const n = root.get(layout.meta.node);
-          if (n) {
-            names.set(layout.meta.node, n);
-            drawCells(ctx, layout, props, names, w, h, cx, cy);
-          }
-        });
+  const names = preloaded ?? new Map<number, string>();
+  drawCells(ctx, layout, props, names, w, h, cx, cy);
+
+  // Cold-cache fallback: any labelable id inside the resolveNames fetch
+  // cap still missing → resolve async and redraw once (token-guarded).
+  // Count, don't break at the first miss: the cap mirrors resolveNames'
+  // slice(0, 400) — a miss BEYOND it will never resolve, so only the
+  // first 400 misses trigger the async pass.
+  let missing = false;
+  let seen = 0;
+  for (const c of layout.cells) {
+    if (c.id >= SYNTH_BASE) continue;
+    if (names.has(c.id)) continue;
+    if (!labelable(c, mode)) continue;
+    seen++;
+    if (seen > 400) break;
+    missing = true;
+  }
+  if (missing) {
+    void resolveNames(layout.meta.generation, layout.cells, layout.meta.groups, mode).then(
+      (resolved) => {
+        if (token.cancelled) return;
+        // Sunburst also gets its root name for the center disc.
+        if (mode === "sunburst" && !resolved.has(layout.meta.node)) {
+          void getNames(layout.meta.generation, [layout.meta.node]).then((root) => {
+            if (token.cancelled) return;
+            const n = root.get(layout.meta.node);
+            if (n) {
+              resolved.set(layout.meta.node, n);
+              drawCells(ctx, layout, props, resolved, w, h, cx, cy);
+            }
+          });
+        }
+        drawCells(ctx, layout, props, resolved, w, h, cx, cy);
+      },
+    );
+  } else if (mode === "sunburst" && !names.has(layout.meta.node)) {
+    // Names were complete but the sunburst root id is not labelable by
+    // the generic gate — fetch it for the center disc.
+    void getNames(layout.meta.generation, [layout.meta.node]).then((root) => {
+      if (token.cancelled) return;
+      const n = root.get(layout.meta.node);
+      if (n) {
+        names.set(layout.meta.node, n);
+        drawCells(ctx, layout, props, names, w, h, cx, cy);
       }
-      drawCells(ctx, layout, props, names, w, h, cx, cy);
-    },
-  );
-  drawCells(ctx, layout, props, new Map(), w, h, cx, cy);
+    });
+  }
 }
 
 /** The UI font family (canvas text needs it as a string). */
@@ -412,6 +584,10 @@ function drawCells(
 ): void {
   const mode = layout.meta.mode;
   const bg = getComputedStyle(document.documentElement).getPropertyValue("--border").trim() || "#d8d8dd";
+  // Font family read ONCE per pass — the old per-label uiFont() calls
+  // each hit getComputedStyle (a style-recalc flush per labelable
+  // cell, thousands per repaint on big layouts).
+  const fontUi = getComputedStyle(document.documentElement).getPropertyValue("--font-ui") || "system-ui";
   // Mind-map dot labels defer to a collision-aware pass (biggest dot
   // first, overlapping labels dropped — the engine docs' "biggest-first,
   // skipping collisions" promise; the inline draw collided freely).
@@ -447,16 +623,21 @@ function drawCells(
       ctx.stroke();
     }
   }
-  // sunburst: subtle ring separators
+  // sunburst: subtle ring separators — ONE circle per DISTINCT ring
+  // boundary (the old loop drew only the first ARC's outer radius and
+  // broke: ring 1 got a separator, every deeper ring had none).
   if (mode === "sunburst") {
     ctx.strokeStyle = bg;
+    ctx.lineWidth = 0.8;
+    const radii = new Set<number>();
     for (const c of layout.cells) {
       if ((c.flags & 0b111) !== CELL_KIND.ARC) continue;
-      ctx.lineWidth = 0.8;
-      ctx.beginPath();
-      ctx.arc(cx, cy, c.g[3], 0, Math.PI * 2);
-      ctx.stroke();
-      break; // one circle per ring is enough (first cell of each ring)
+      if (!radii.has(c.g[3])) {
+        radii.add(c.g[3]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, c.g[3], 0, Math.PI * 2);
+        ctx.stroke();
+      }
     }
   }
 
@@ -466,7 +647,59 @@ function drawCells(
   for (const c of layout.cells) {
     const kind = c.flags & 0b111;
     const fill = cssRgbaTheme(c.rgba, darkCells);
-    if (kind === CELL_KIND.RECT) {
+    if (kind === CELL_KIND.HEADER) {
+      // Treemap folder title strip — the engine reserves a 14px band
+      // above the children for exactly this. The renderer used to skip
+      // kind 4 entirely, so production showed a BLANK band and folder
+      // names never appeared (the browser mock drew a plain RECT there,
+      // masking the gap in dev). Draw it like a window title bar: the
+      // family fill shaded one step deeper than the children, a
+      // hairline bottom edge, and the folder name centered in the band.
+      const [x, y, rw, rh] = c.g;
+      ctx.fillStyle = fill;
+      ctx.fillRect(x, y, rw, rh);
+      // Shade: light theme mixes toward ink 10% (a readable title bar);
+      // dark theme mixes toward white 8% (lifts the strip off the body).
+      ctx.fillStyle = darkCells ? "rgba(255,255,255,0.08)" : "rgba(29,29,31,0.10)";
+      ctx.fillRect(x, y, rw, rh);
+      // Hairline edge between the strip and the children's body.
+      ctx.fillStyle = "rgba(29,29,31,0.16)";
+      ctx.fillRect(x, y + rh - 1, rw, 1);
+      // Same white separator language as the RECT cells.
+      if (rw >= 6) {
+        ctx.strokeStyle = "rgba(255,255,255,0.55)";
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x + 0.5, y + 0.5, rw - 1, rh - 1);
+      }
+      const name = names.get(c.id);
+      if (name && rw >= 42) {
+        const label = props.abbreviateLabels ? abbreviate(name) : name;
+        const midY = y + rh / 2 + 0.5;
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "left";
+        ctx.font = `600 10px ${fontUi}`;
+        // Name first (clipped to leave breathing room); size follows
+        // right-aligned when the strip is wide enough for both.
+        const nameText = clipLabel(ctx, label, rw - 10);
+        if (nameText) haloText(ctx, nameText, x + 6, midY, ON_PASTEL);
+        if (rw >= 176 && c.size > 0) {
+          const sizeStr = bytes(c.size);
+          ctx.font = `600 9.5px ${fontUi}`;
+          const sizeText = clipLabel(ctx, sizeStr, Math.min(rw / 3, 84));
+          if (sizeText) {
+            const nw = nameText ? ctx.measureText(nameText).width : 0;
+            const sw = ctx.measureText(sizeText).width;
+            // Only when the two never collide; otherwise the name wins.
+            if (x + 6 + nw + 10 + sw <= x + rw - 6) {
+              ctx.textAlign = "right";
+              ctx.fillStyle = ON_PASTEL_2;
+              ctx.fillText(sizeText, x + rw - 6, midY);
+              ctx.textAlign = "left";
+            }
+          }
+        }
+      }
+    } else if (kind === CELL_KIND.RECT) {
       const [x, y, rw, rh] = c.g;
       ctx.fillStyle = fill;
       ctx.fillRect(x, y, rw, rh);
@@ -497,7 +730,7 @@ function drawCells(
           const mid = rw >= 84 && rh >= 26;
           const fontPx = big ? 12.5 : mid ? 11 : 10;
           const weight = big ? 700 : 600;
-          ctx.font = `${weight} ${fontPx}px ${uiFont()}`;
+          ctx.font = `${weight} ${fontPx}px ${fontUi}`;
           ctx.textBaseline = "top";
           haloText(
             ctx,
@@ -510,7 +743,7 @@ function drawCells(
           // on big cells (size arrives via the frame's u64 sizes tail;
           // "600 9px" was dead styling before the tail existed).
           if (big && rh >= 64 && c.size > 0) {
-            ctx.font = `600 ${Math.max(9.5, fontPx - 2.5)}px ${uiFont()}`;
+            ctx.font = `600 ${Math.max(9.5, fontPx - 2.5)}px ${fontUi}`;
             haloText(ctx, bytes(c.size), x + 5, y + 6 + fontPx, ON_PASTEL_2);
           }
         }
@@ -541,7 +774,7 @@ function drawCells(
       if (name) {
         const label = props.abbreviateLabels ? abbreviate(name) : name;
         ctx.fillStyle = ON_PASTEL;
-        ctx.font = `600 9px ${uiFont()}`;
+        ctx.font = `600 9px ${fontUi}`;
         ctx.textBaseline = "middle";
         const cosMid = Math.cos(midA);
         if (span * (r0 + 5) > 11 && ringW >= 24) {
@@ -592,14 +825,14 @@ function drawCells(
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.fillStyle = ON_PASTEL;
-          ctx.font = `${big ? 700 : 600} ${big ? 11.5 : 9.5}px ${uiFont()}`;
+          ctx.font = `${big ? 700 : 600} ${big ? 11.5 : 9.5}px ${fontUi}`;
           // Big bubbles get the reference's stacked treatment: name over
           // size (the u64 sizes tail) — small ones keep the single line.
           // All bubble labels defer to the collision pass (bigger wins).
           if (big && c.size > 0) {
             const l1 = clipLabel(ctx, label, r * 1.7);
             const w1 = ctx.measureText(l1).width;
-            ctx.font = `600 10px ${uiFont()}`;
+            ctx.font = `600 10px ${fontUi}`;
             const sizeStr = bytes(c.size);
             const w2 = ctx.measureText(sizeStr).width;
             pendingCircleLabels.push({
@@ -612,10 +845,10 @@ function drawCells(
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
                 ctx.fillStyle = ON_PASTEL;
-                ctx.font = `700 11.5px ${uiFont()}`;
+                ctx.font = `700 11.5px ${fontUi}`;
                 ctx.fillText(l1, x, y - 7);
                 ctx.fillStyle = ON_PASTEL_2;
-                ctx.font = `600 10px ${uiFont()}`;
+                ctx.font = `600 10px ${fontUi}`;
                 ctx.fillText(sizeStr, x, y + 8);
                 ctx.textAlign = "left";
               },
@@ -625,7 +858,7 @@ function drawCells(
             // points (space / hyphen / underscore / camelCase) over
             // truncation — "Temp Ca..." becomes "Temp" / "Cache". Falls
             // back to adaptive font (9.5 → 8.5px) then the r×1.8 clip.
-            ctx.font = `600 9.5px ${uiFont()}`;
+            ctx.font = `600 9.5px ${fontUi}`;
             const maxW = r * 1.8;
             let text = clipLabel(ctx, label, maxW);
             let fontPx = 9.5;
@@ -639,7 +872,7 @@ function drawCells(
               ) {
                 lines = [clipLabel(ctx, parts[0], r * 1.9), clipLabel(ctx, parts[1], r * 1.9)];
               } else {
-                ctx.font = `600 8.5px ${uiFont()}`;
+                ctx.font = `600 8.5px ${fontUi}`;
                 fontPx = 8.5;
                 const retry = clipLabel(ctx, label, maxW);
                 if (!retry.endsWith("…") || retry.length > text.length) text = retry;
@@ -657,7 +890,7 @@ function drawCells(
                   ctx.textAlign = "center";
                   ctx.textBaseline = "middle";
                   ctx.fillStyle = ON_PASTEL;
-                  ctx.font = `600 9.5px ${uiFont()}`;
+                  ctx.font = `600 9.5px ${fontUi}`;
                   ctx.fillText(lines[0], x, y - 5);
                   ctx.fillText(lines[1], x, y + 6);
                   ctx.textAlign = "left";
@@ -675,7 +908,7 @@ function drawCells(
                   ctx.textAlign = "center";
                   ctx.textBaseline = "middle";
                   ctx.fillStyle = ON_PASTEL;
-                  ctx.font = `600 ${fontPx}px ${uiFont()}`;
+                  ctx.font = `600 ${fontPx}px ${fontUi}`;
                   ctx.fillText(text, x, y);
                   ctx.textAlign = "left";
                 },
@@ -699,7 +932,7 @@ function drawCells(
         if (name) {
           const label = props.abbreviateLabels ? abbreviate(name) : name;
           ctx.fillStyle = ON_PASTEL;
-          ctx.font = "600 10px " + getComputedStyle(document.documentElement).getPropertyValue("--font-ui");
+          ctx.font = "600 10px " + fontUi;
           ctx.textBaseline = "middle";
           const left = x > w / 2;
           ctx.textAlign = left ? "right" : "left";
@@ -856,7 +1089,10 @@ function hitCell(cells: Cell[], _mode: string, x: number, y: number, center: [nu
   for (let i = cells.length - 1; i >= 0; i--) {
     const c = cells[i];
     const kind = c.flags & 0b111;
-    if (kind === CELL_KIND.RECT) {
+    if (kind === CELL_KIND.RECT || kind === CELL_KIND.HEADER) {
+      // HEADER strips are 14px rects (g = x,y,w,h) — the old loop had
+      // no kind-4 branch, so clicks on a folder's title band fell
+      // through to an ANCESTOR's cell instead of selecting the folder.
       if (x >= c.g[0] && x <= c.g[0] + c.g[2] && y >= c.g[1] && y <= c.g[1] + c.g[3]) return c;
     } else if (kind === CELL_KIND.CIRCLE || kind === CELL_KIND.DOT) {
       const dx = x - c.g[0];
@@ -867,16 +1103,13 @@ function hitCell(cells: Cell[], _mode: string, x: number, y: number, center: [nu
       const dy = y - cy;
       const r = Math.sqrt(dx * dx + dy * dy);
       if (r >= c.g[2] && r <= c.g[3]) {
-        let a = Math.atan2(dy, dx);
         const a0 = c.g[0];
         const a1 = c.g[1];
-        // normalize a into [a0, a0 + 2π)
-        let norm = a;
+        // normalize into [a0, a0 + 2π)
+        let norm = Math.atan2(dy, dx);
         while (norm < a0) norm += Math.PI * 2;
         while (norm > a0 + Math.PI * 2) norm -= Math.PI * 2;
         if (norm <= a1) return c;
-        a = norm;
-        void a;
       }
     }
   }
@@ -895,7 +1128,7 @@ function ringPath(
 ): void {
   const kind = c.flags & 0b111;
   ctx.beginPath();
-  if (kind === CELL_KIND.RECT) {
+  if (kind === CELL_KIND.RECT || kind === CELL_KIND.HEADER) {
     const i = inset > 0 ? inset : 1;
     if (c.g[2] - 2 * i > 1 && c.g[3] - 2 * i > 1) {
       ctx.rect(c.g[0] + i, c.g[1] + i, c.g[2] - 2 * i, c.g[3] - 2 * i);

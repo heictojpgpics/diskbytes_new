@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIcon, CpuIcon, HardDriveIcon, MemoryStickIcon, WifiIcon } from "../components/Icon";
-import { EmptyState, Spinner } from "../components/buttons";
+import { EmptyState, Skeleton } from "../components/buttons";
 import { invoke, listen } from "../lib/ipc";
 import { bytes } from "../lib/format";
 
@@ -127,10 +127,21 @@ export function MonitorView() {
   }
 
   if (!latest) {
+    // Structure preview (loading system v2): the 2-column monitor grid
+    // fills with card skeletons while the sampler warms up — the tab
+    // keeps its footprint instead of collapsing to a centered glyph.
     return (
       <div className="db-tab db-scroll">
-        <div className="db-loading-block">
-          <Spinner />
+        <div className="db-mon-grid" aria-hidden="true">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="db-mon-card db-mon-skeleton">
+              <Skeleton w={120} h={10} />
+              <Skeleton w={72} h={26} />
+              <Skeleton w="100%" h={36} />
+            </div>
+          ))}
+        </div>
+        <div className="db-loading-block" role="status">
           <span>Starting sampler (2 s cadence)…</span>
         </div>
       </div>
@@ -139,9 +150,11 @@ export function MonitorView() {
 
   const memUsed = latest.memTotal - latest.memAvailable;
   const otherMem = Math.max(0, memUsed - (latest.compressed ?? 0) - latest.kernelPaged - latest.kernelNonpaged);
+  // Segment colors all speak tokens now (the amber literal #f59e0b was
+  // the one raw hex in the data layer — off-palette in dark mode).
   const segs = [
     { label: "Kernel pool", size: latest.kernelPaged + latest.kernelNonpaged, color: "var(--used)" },
-    { label: "Compressed", size: latest.compressed ?? 0, color: "#f59e0b" },
+    { label: "Compressed", size: latest.compressed ?? 0, color: "var(--seg-compressed, #f59e0b)" },
     { label: "Other in use", size: otherMem, color: "var(--ink)" },
     { label: "Free", size: latest.memAvailable, color: "var(--free)" },
   ];

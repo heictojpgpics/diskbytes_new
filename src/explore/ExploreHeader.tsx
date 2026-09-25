@@ -11,6 +11,7 @@ import {
   COLORED_MODES, DEPTH_MODES, MODES, MODE_CAPTIONS, useVizUiStore, type Mode,
 } from "../state/vizUi";
 import { EVENTS, track } from "../lib/analytics";
+import { SPRING_UI } from "../lib/motion";
 
 const MODE_ICONS: Record<Mode, AnyIcon> = {
   Folders: FolderIcon,
@@ -51,7 +52,7 @@ export function ExploreHeader() {
               title={m}
               aria-label={m}
             >
-              {mode === m && <motion.span layoutId="db-mode-pill" className="db-mode-pill" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
+              {mode === m && <motion.span layoutId="db-mode-pill" className="db-mode-pill" transition={SPRING_UI} />}
               <Icon size={15} />
               {mode === m && <span>{m}</span>}
             </button>

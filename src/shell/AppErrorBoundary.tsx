@@ -2,22 +2,33 @@
  * App error boundary: a crash shows a readable diagnostic screen
  * instead of a blank window (production-grade resilience), with the
  * component stack so failures are debuggable from a screenshot.
+ *
+ * Styles are inline ON PURPOSE: a crash above the CSS import order (or a
+ * stylesheet that failed to parse) must not leave the boundary itself
+ * unstyled — this screen is the last resort that has to render no
+ * matter what broke.
  */
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 interface State {
   error: Error | null;
+  componentStack: string | null;
 }
 
 export class AppErrorBoundary extends Component<{ children: ReactNode }, State> {
-  state: State = { error: null };
+  state: State = { error: null, componentStack: null };
 
   static getDerivedStateFromError(error: Error): State {
-    return { error };
+    return { error, componentStack: null };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error("[DiskBytes] UI crashed:", error, info.componentStack);
+    // `componentStack` only arrives HERE (getDerivedStateFromError runs
+    // before React composes the info). The old render read a
+    // `this.props.info` that never existed, so the stack area was
+    // always empty — the console kept what the screen promised.
+    this.setState({ componentStack: info.componentStack ?? null });
   }
 
   render(): ReactNode {
@@ -40,7 +51,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
               {String(this.state.error?.stack ?? this.state.error)}
             </pre>
             <pre style={{ whiteSpace: "pre-wrap", fontSize: 11, opacity: 0.6 }}>
-              {String((this.props as { info?: ErrorInfo }).info?.componentStack ?? "")}
+              {this.state.componentStack ?? ""}
             </pre>
             <button
               type="button"

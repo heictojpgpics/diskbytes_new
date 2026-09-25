@@ -79,6 +79,18 @@
   gap: 3px;
   margin-top: 8px;
 }
+/* Skeleton preview for ranked lists (loading system v2) — same inset
+ * rhythm as the real list so the swap causes no reflow. */
+.db-ranked-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 10px;
+  padding: 0 4px;
+}
+.db-ranked-skeleton .db-skeleton-row {
+  padding: 6px 0;
+}
 .db-ranked button {
   width: 100%;
   display: grid;
@@ -166,7 +178,8 @@
   font-variant-numeric: tabular-nums;
 }
 .db-ranked button.is-selected .rank-bar {
-  outline: 2px solid color-mix(in oklab, var(--ink) 60%, transparent);
+  /* Same selection language as cards/canvas: 2.5px ink ring. */
+  outline: 2.5px solid color-mix(in oklab, var(--ink) 55%, transparent);
 }
 
 /* Dark mode: the rank-bar text sits on the ROW surface (the pastel
@@ -204,8 +217,8 @@
   justify-content: space-between;
   align-items: baseline;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--text-tertiary);
+  letter-spacing: 0.09em;
+  color: var(--text-secondary);
   font-size: 9.5px;
   font-weight: 700;
   margin-bottom: 11px;
@@ -308,10 +321,10 @@
   justify-content: flex-end;
   gap: 7px;
   margin-top: 10px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-size: 9.5px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
 }
 .heat-legend .db-heat-scale {
   display: flex;
@@ -387,7 +400,7 @@
 .db-stage-toggle.staged {
   background: var(--free);
   border-color: var(--free);
-  color: #fff;
+  color: var(--on-free);
 }
 
 /* ── List mode ──────────────────────────────────────────────────────── */
@@ -398,18 +411,32 @@
 .list-head,
 .db-list-row {
   display: grid;
-  grid-template-columns: 18px 18px minmax(140px, 1fr) minmax(90px, 160px) 44px 86px 70px;
+  grid-template-columns: 18px 18px minmax(140px, 1fr) minmax(90px, 160px) 48px 64px 84px;
   align-items: center;
   gap: 8px;
 }
 .list-head {
   padding: 7px 8px;
   border-bottom: 1px solid var(--divider);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-size: 9.5px;
   text-transform: uppercase;
   letter-spacing: 0.09em;
   font-weight: 650;
+}
+/* Numeric headers/values share right-alignment so the tnum digits
+ * land in the same visual column as their caption. */
+.list-head .is-num,
+.db-list-items,
+.db-list-row > em,
+.db-list-row > b {
+  text-align: right;
+  justify-self: end;
+}
+.db-list-items {
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--text-secondary);
 }
 .db-list-row {
   width: 100%;
@@ -488,16 +515,9 @@
   color: var(--text-tertiary);
 }
 
-/* loading shimmer for async sections */
-.db-loading-block {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 40px;
-  color: var(--text-tertiary);
-  font-size: 12px;
-}
+/* (loading states live in base.css — Loading system v2: spinner,
+ * skeletons, pulsing label. The old local block was a spinner on a
+ * blank void with no structure preview.) */
 
 /* Layout-failure state (surfaces get_layout errors inline — a silent
    blank canvas is undiagnosable from CI screenshots). */
@@ -520,8 +540,11 @@
 }
 .db-viz-error span {
   font-size: 12px;
-  font-family: var(--mono, monospace);
+  font-family: var(--font-mono);
   max-width: 480px;
   overflow-wrap: anywhere;
-  color: var(--danger, #b3574d);
+  /* `--danger` never existed (fallback #b3574d is off-palette); the
+   * error family color is --used — same hue the explore error states
+   * already use, so failures speak one color language. */
+  color: var(--used);
 }

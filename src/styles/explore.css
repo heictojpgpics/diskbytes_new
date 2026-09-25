@@ -80,7 +80,12 @@
   gap: 10px;
   min-height: 42px;
   margin-top: 12px;
-  flex-wrap: nowrap;
+  /* Wrap as a LAST RESORT at the 1280px window with the inspector
+   * open (main column ≈ 624px): nowrap + a never-shrinking
+   * segmented control overflowed horizontally off-canvas. Wrapping
+   * the tertiary controls onto a second line degrades gracefully;
+   * clipping them silently does not. */
+  flex-wrap: wrap;
 }
 
 /* Mode picker — icon-only capsule; the active one grows its label */
@@ -290,9 +295,11 @@
 }
 .db-state .db-live-counter {
   font-variant-numeric: tabular-nums;
-  font-size: 15px;
+  /* 13px/650: on the body type scale (15px/600 matched nothing else
+   * in the system — the audit's off-scale outlier). */
+  font-size: 13px;
   color: var(--text-secondary);
-  font-weight: 600;
+  font-weight: 650;
 }
 .db-state .db-current-path {
   /* Rendered by <TailPath> (JS-measured middle-ellipsis). The old
@@ -305,7 +312,7 @@
    * placeholder width. */
   width: 70%;
   min-height: 17px;
-  font: 11px/1.6 var(--font-mono);
+  font: 10.5px/1.5 var(--font-mono);
   /* text-secondary (4.9:1): the live path is what tells the user WHAT
    * is being scanned — tertiary (3.1:1) at this size was sub-AA. */
   color: var(--text-secondary);
@@ -314,6 +321,12 @@
 .db-state .db-state-actions {
   display: flex;
   gap: 10px;
+  /* Height parity inside a pair: the outline sibling of an ink button
+   * matches the ink 40px (its solo 34px default made side-by-side CTAs
+   * read wobbly — VLM idle-state audit). */
+}
+.db-state .db-state-actions .db-outline {
+  min-height: 40px;
 }
 .db-state p {
   margin: 0;
@@ -322,10 +335,12 @@
   line-height: 1.55;
 }
 
-/* ── Premium scanning visual — radial disk sweep ──────────────────────
+/* ── Premium scanning visual — radial disk sweep (v2) ─────────────────
  * Transform/opacity-only animations (compositor-driven, 60 fps): a
- * slow conic sweep orbiting a disk core over faint concentric data
- * rings. Replaces the old plain spinner + pulsing counter. */
+ * conic sweep orbiting a disk core over faint concentric data rings.
+ * v2: a second, counter-rotating outer tail (the iOS dual-arc depth
+ * cue at hero scale) + a breathing core icon. The two orbits and the
+ * pulse all sit on one tempo family (1.9s / 3.8s / 2.4s≈1.9s×1.25). */
 .db-scan-visual {
   position: relative;
   width: 132px;
@@ -367,6 +382,27 @@
   animation: db-sweep-orbit 1.9s linear infinite;
   will-change: transform;
 }
+/* Outer companion arc: fainter, wider, slower, counter-rotating — the
+ * second hand of the instrument. Draws on a 5px annulus just outside
+ * the main sweep so the two never overlap (overlap shimmered in the
+ * prototype). */
+.db-scan-sweep2 {
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 180deg,
+    transparent 0deg,
+    transparent 300deg,
+    var(--ink-soft) 340deg,
+    transparent 360deg
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
+  animation: db-sweep-orbit 3.8s linear infinite reverse;
+  opacity: 0.55;
+  will-change: transform;
+}
 @keyframes db-sweep-orbit {
   to {
     transform: rotate(360deg);
@@ -382,6 +418,17 @@
   border: 1px solid var(--divider);
   color: var(--ink);
   box-shadow: var(--shadow-1), 0 0 0 6px var(--background);
+}
+/* Core icon breathes with the pulse — a 2% scale inhale, transform
+ * only, phase-aligned with the glow so the core reads as one living
+ * instrument rather than two unrelated effects. */
+.db-scan-core > svg {
+  animation: db-scan-core-breathe 2.4s var(--ease-in-out) infinite;
+  will-change: transform;
+}
+@keyframes db-scan-core-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
 }
 /* The pulse glow is a PRE-PAINTED layer whose opacity animates —
  * compositor-only, no per-frame box-shadow repaints. */
@@ -402,6 +449,20 @@
   }
   50% {
     opacity: 1;
+  }
+}
+/* Reduced motion: the hero slows to instrument-needle pace instead of
+ * freezing mid-orbit (a static partial arc reads as a stalled scan —
+ * the opposite of the preference's intent; see base.css for the
+ * exception rationale). */
+@media (prefers-reduced-motion: reduce) {
+  .db-scan-sweep {
+    animation-duration: 6s !important;
+  }
+  .db-scan-sweep2,
+  .db-scan-core > svg,
+  .db-scan-core::after {
+    animation: none !important;
   }
 }
 .db-cancel-scan {
@@ -453,7 +514,7 @@
   font-size: 12.5px;
   font-weight: 750;
   margin: 0;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--text-secondary);
 }
@@ -662,6 +723,25 @@
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
 }
+/* Folder-card skeletons (loading system v2): the SAME grid template and
+ * card height as the real grid — the stage keeps its footprint while
+ * the first page loads, so landing data never reflows. */
+.db-folder-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.db-folder-skeleton {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 7px;
+  height: 148px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  background: var(--card);
+}
 .db-file-row {
   position: relative;
   display: grid;
@@ -680,7 +760,10 @@
 }
 .db-file-row.is-selected {
   border-color: color-mix(in oklab, var(--ink) 70%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ink) 25%, transparent);
+  /* 2.5px ink ring — same width/opacity family as the canvas selection
+   * stroke and the folder-card ring (three treatments before: 2.5/2/2px
+   * at three different opacities for the same role). */
+  box-shadow: 0 0 0 2.5px color-mix(in oklab, var(--ink) 55%, transparent);
 }
 .db-file-row > svg,
 .db-file-row > span {
@@ -729,6 +812,18 @@
   font-size: 13.5px;
   font-weight: 550;
 }
+/* Section-level variant: a quiet row INSIDE a populated view (e.g. the
+ * FILES area under a filled FOLDERS grid) — the stage-level 72px
+ * centered treatment read as a broken second empty state, fighting
+ * the section above it for hierarchy (VLM folders audit). */
+.db-substate.inline {
+  padding: 14px 4px 20px;
+  text-align: left;
+  font-size: 12.5px;
+}
+.db-substate.inline::before {
+  display: none;
+}
 .db-substate::before {
   content: "";
   display: block;
@@ -776,10 +871,11 @@
     padding-inline: 9px;
   }
 }
-@media (max-width: 1180px) {
-  .db-toolbar-row {
-    flex-wrap: wrap;
-  }
+/* Compact-column wrap refinement: below 1280 VIEWPORT the main column
+ * (1280 − sidebar − inspector ≈ 624px) wraps the toolbar; the segmented
+ * control drops to its own line LAST (after the depth slider). (Was
+ * 1180px — unreachable: the enforced window minimum is 1280.) */
+@media (max-width: 1280px) {
   .db-segmented {
     order: 3;
   }

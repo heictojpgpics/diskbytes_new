@@ -11,7 +11,7 @@ import { CheckIcon, LockKeyholeIcon, categoryIcon } from "../../components/Icon"
 import { getFolderView, type FolderViewData } from "../../viz/exploreIpc";
 import { bytes, relativeAge } from "../../lib/format";
 import { useCleanupStore } from "../../state/cleanup";
-import { Spinner } from "../../components/buttons";
+import { Skeleton } from "../../components/buttons";
 import { useArrowNav } from "../../lib/useArrowNav";
 
 const TONES = ["blue", "mint", "violet", "amber", "rose", "green", "sky", "slate"];
@@ -106,15 +106,31 @@ export function FoldersMode(props: FoldersModeProps) {
     },
   });
 
-  if (stale) {
-    return <div className="db-loading-block">Scan changed — reloading…</div>;
-  }
-
-  if (!data) {
+  if (stale || !data) {
+    // Structure preview: folder-card skeletons in the real grid rhythm
+    // (auto-fill minmax(240px,1fr)) + the heading chip — the stage keeps
+    // its height, so data landing causes no reflow. Stale adds the
+    // honest label.
     return (
-      <div className="db-loading-block">
-        <Spinner />
-        <span>Loading folders…</span>
+      <div className="db-folders-view">
+        <div className="db-view-heading">
+          <h2>Folders</h2>
+          <Skeleton w={38} h={17} pill />
+        </div>
+        <div className="db-folders-scroll db-scroll">
+          <div className="db-folder-skeleton-grid">
+            {Array.from({ length: 6 }, (_, i) => (
+              <div key={i} className="db-folder-skeleton" aria-hidden="true">
+                <span className="db-skeleton" style={{ width: "34%", height: 12 }} />
+                <span className="db-skeleton" style={{ width: "22%", height: 10, opacity: 0.75 }} />
+                <span className="db-skeleton" style={{ width: "58%", height: 10, marginTop: 6 }} />
+              </div>
+            ))}
+          </div>
+          <div className="db-loading-block" role="status">
+            <span>{stale ? "Scan changed — reloading…" : "Loading folders…"}</span>
+          </div>
+        </div>
       </div>
     );
   }
@@ -212,7 +228,7 @@ export function FoldersMode(props: FoldersModeProps) {
           </div>
         )}
         {data.files.length === 0 ? (
-          <div className="db-substate">
+          <div className="db-substate inline">
             {props.filter ? `No files match “${props.filter}”.` : "No files in this folder."}
           </div>
         ) : (

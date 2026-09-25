@@ -26,18 +26,23 @@ export interface AgeMapModeProps {
 
 export function AgeMapMode(props: AgeMapModeProps) {
   const [data, setData] = useState<AgeMapDataData | null>(null);
+  const [stale, setStale] = useState(false);
   const stage = useCleanupStore((s) => s.stage);
   const contains = useCleanupStore((s) => s.contains);
   const unstage = useCleanupStore((s) => s.unstage);
 
   useEffect(() => {
     let disposed = false;
+    // A dropped stale response used to leave `data` null forever — the
+    // bucketing spinner spun for eternity under a rescan. FoldersMode
+    // already had the honest pattern: say the scan changed and wait.
+    setStale(false);
     void (async () => {
       try {
         const d = await getAgeMap(props.generation, props.folder);
         if (!disposed) setData(d);
       } catch {
-        /* stale — dropped */
+        if (!disposed) setStale(true);
       }
     })();
     return () => {
@@ -46,11 +51,14 @@ export function AgeMapMode(props: AgeMapModeProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.generation, props.folder]);
 
-  if (!data) {
+  if (!data || stale) {
+    // Honest wait states: initial bucketing OR a dropped stale response
+    // (the old code kept rendering previous-generation data forever on
+    // a failed refetch — FoldersMode's pattern, applied here too).
     return (
-      <div className="db-loading-block">
+      <div className="db-loading-block" role="status">
         <Spinner />
-        <span>Bucketing by age…</span>
+        <span>{stale ? "Scan changed — reloading…" : "Bucketing by age…"}</span>
       </div>
     );
   }

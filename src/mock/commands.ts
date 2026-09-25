@@ -726,6 +726,7 @@ const commands: Record<string, Cmd> = {
         return {
           id: c, name: cn.name, isDir: cn.isDir, hasChildren: cn.children.length > 0,
           share: (cn.onDisk || cn.logical) / (st.onDisk || 1), size: cn.onDisk || cn.logical,
+          items: cn.children.length,
           category: cn.isDir ? "Folder" : CATEGORY_LABELS[cn.category],
           color: CATEGORY_COLORS[cn.isDir ? 8 : cn.category],
           protected: cn.protected, cloud: cn.cloud, modified: cn.modified,

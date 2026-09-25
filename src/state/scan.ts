@@ -9,6 +9,7 @@ import { create } from "zustand";
 import { invoke } from "../lib/ipc";
 import { EVENTS, track } from "../lib/analytics";
 import { listen, type UnlistenFn } from "../lib/ipc";
+import { invalidateLayouts, invalidateHoverCache } from "../viz/layoutIpc";
 
 export interface ScanProgress {
   files: number;
@@ -325,6 +326,13 @@ export const useScanStore = create<ScanStore>((set, get) => ({
       const un2 = await listen<ScanDoneEvent>("scan-done", (e) => {
         const { generation, stats, error } = e;
         if (generation !== get().generation) return;
+        // New tree: the per-id caches (names LRU, hover details, decoded
+        // layouts) are keyed by ARENA id — a fresh scan reuses ids for
+        // different nodes, so stale entries would surface names, sizes
+        // and chips from the PREVIOUS target. The invalidators existed
+        // but were never called; this is the wiring point.
+        invalidateHoverCache();
+        invalidateLayouts();
         if (error) {
           scanStartedAt = null;
           set({ status: "error", error });

@@ -738,6 +738,11 @@ pub struct ListRow {
     pub size: u64,
     /// Category label (kind caption for files).
     pub category: String,
+    /// Direct children count (folders only; files report 0). Powers
+    /// the List-mode "Items" column — the UI header promised it, the
+    /// rows never carried it (bytes rendered under "Items" and the
+    /// Size column sat empty).
+    pub items: u32,
     /// `0xRRGGBB`.
     pub color: u32,
     pub protected: bool,
@@ -779,6 +784,7 @@ pub fn compute_list(tree: &Tree, node: u32, filter: &str) -> Vec<ListRow> {
             } else {
                 cat.label().to_string()
             },
+            items: n.child_count,
             color: cat.color(),
             protected: n.is_protected(),
             cloud: n.is_cloud_placeholder(),

@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { CopyIcon, FileIcon, SearchIcon, CheckIcon, Trash2Icon } from "../components/Icon";
 import { TailPath } from "../components/TailPath";
-import { EmptyState, Spinner } from "../components/buttons";
+import { EmptyState } from "../components/buttons";
 import { invoke } from "../lib/ipc";
 import { bytes } from "../lib/format";
 import { useScanStore } from "../state/scan";
@@ -99,12 +99,12 @@ export function DuplicatesView() {
                     <b>{bytes(result.wastedTotal)}</b> could be reclaimed across <b>{result.groups.length.toLocaleString()}</b> groups · {result.files.toLocaleString()} files considered
                   </>
                 : "No duplicates found."
-              : "Three passes: size groups, 64 KB prefix hash, full hash."}
+              : "Byte-identical files, grouped for safe removal."}
           </span>
         </div>
         {(result || busy) && (
           <div className="db-tab-head-actions">
-            <button type="button" className="db-ink-button" style={{ width: "auto", padding: "0 18px" }} disabled={busy} onClick={() => void scan()}>
+            <button type="button" className="db-ink-button auto" disabled={busy} onClick={() => void scan()}>
               <SearchIcon size={15} />
               {busy ? "Scanning…" : "Scan Again"}
             </button>
@@ -120,8 +120,7 @@ export function DuplicatesView() {
       )}
 
       {busy && (
-        <div className="db-loading-block">
-          <Spinner />
+        <div className="db-loading-block" role="status">
           <span>Hashing candidates (size groups → 64 KB prefix → full)…</span>
         </div>
       )}
@@ -132,7 +131,7 @@ export function DuplicatesView() {
           title="Find duplicate files"
           body="Three passes — size groups, 64 KB prefix hash, full SHA-256 — group byte-identical files so you can keep one copy and stage the rest."
           action={
-            <button type="button" className="db-ink-button" style={{ width: "auto", padding: "0 18px" }} onClick={() => void scan()}>
+            <button type="button" className="db-ink-button auto" onClick={() => void scan()}>
               <SearchIcon size={15} />
               Scan for Duplicates
             </button>
@@ -157,8 +156,7 @@ export function DuplicatesView() {
               <span className="tnum">{bytes(g.wasted)} wasted</span>
               <button
                 type="button"
-                className="db-outline compact"
-                style={{ width: "auto" }}
+                className="db-outline compact auto"
                 onClick={() => setExpanded((s) => (s.has(g.id) ? new Set([...s].filter((x) => x !== g.id)) : new Set([...s, g.id])))}
               >
                 {isOpen ? "Collapse" : "Show files"}
@@ -181,12 +179,17 @@ export function DuplicatesView() {
                       </span>
                     ) : (
                       <span
-                        className="db-keep-tag stage"
+                        className={`db-keep-tag stage${kept ? " is-disabled" : ""}`}
                         role="button"
-                        tabIndex={0}
+                        tabIndex={kept ? -1 : 0}
+                        aria-disabled={kept ? true : undefined}
                         onClick={() => (kept ? undefined : stageOne(p, g.size))}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") (kept ? undefined : stageOne(p, g.size));
+                          // WAI button pattern: Enter AND Space activate.
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            if (!kept) stageOne(p, g.size);
+                          }
                         }}
                       >
                         <Trash2Icon size={11} /> Stage

@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { Clock3Icon, CameraIcon, Trash2Icon } from "../components/Icon";
 import { TailPath } from "../components/TailPath";
-import { EmptyState, Spinner } from "../components/buttons";
+import { EmptyState, SkeletonRows } from "../components/buttons";
 import { invoke } from "../lib/ipc";
 import { bytes } from "../lib/format";
 import { useScanStore } from "../state/scan";
@@ -106,14 +106,13 @@ export function SnapshotsView() {
       <div className="db-tab-head">
         <div>
           <h1>Snapshots</h1>
-          <span className="db-tab-sub">{list ? `${list.length} saved · pick Before + After to diff` : "…"}</span>
+          <span className="db-tab-sub">{list === null ? "Loading…" : list.length > 0 ? `${list.length} saved · pick Before + After to diff` : ""}</span>
         </div>
         {(list ?? []).length > 0 && (
           <div className="db-tab-head-actions">
             <button
               type="button"
-              className="db-ink-button"
-              style={{ width: "auto", padding: "0 18px" }}
+              className="db-ink-button auto"
               disabled={saving || status !== "done"}
               onClick={() => void take()}
             >
@@ -124,7 +123,11 @@ export function SnapshotsView() {
         )}
       </div>
 
-      {(list ?? []).length === 0 && (
+      {list === null ? (
+        // Initial list load (loading system v2): snapshot-row skeletons —
+        // the old view showed only “…” in the sub and no body at all.
+        <SkeletonRows rows={4} className="db-tab-skeleton" />
+      ) : list.length === 0 ? (
         <EmptyState
           icon={<CameraIcon size={28} />}
           title="No snapshots yet"
@@ -141,49 +144,51 @@ export function SnapshotsView() {
             </button>
           }
         />
+      ) : (
+        <>
+          {list.map((s) => (
+            <div className="db-snap-row" key={s.id}>
+              <Clock3Icon size={15} />
+              <div>
+                <strong>{s.root}</strong>
+                <small>
+                  <b>{bytes(s.total)}</b> · {fmtDate(s.takenAt)} · {s.folders.toLocaleString()} folders
+                </small>
+              </div>
+              <div className="db-snap-toggle" role="group" aria-label="Before or after">
+                <button type="button" data-active={before === s.id} onClick={() => before === s.id ? setBefore(null) : before && after && before !== s.id ? void runDiff(s.id, after) : setBefore(s.id)}>
+                  Before
+                </button>
+                <button type="button" data-active={after === s.id} onClick={() => after === s.id ? setAfter(null) : before && after !== s.id ? void runDiff(before, s.id) : setAfter(s.id)}>
+                  After
+                </button>
+              </div>
+              {before && after && (
+                <button type="button" className="db-outline compact auto" onClick={() => void runDiff(before, after)} disabled={diffing}>
+                  {diffing ? "Diffing…" : "Compare"}
+                </button>
+              )}
+              <button
+                type="button"
+                className={`db-icon-button ${armDel === s.id ? "db-del-armed" : ""}`}
+                style={armDel === s.id ? { width: "auto", height: 30, padding: "0 10px", fontSize: 11 } : { width: 30, height: 30 }}
+                aria-label={armDel === s.id ? `Confirm delete snapshot ${s.id}` : `Delete snapshot ${s.id}`}
+                title={armDel === s.id ? "Click again to delete permanently" : "Delete snapshot"}
+                onClick={() => (armDel === s.id ? void del(s.id) : setArmDel(s.id))}
+                onBlur={() => armDel === s.id && setArmDel(null)}
+              >
+                {armDel === s.id ? "Delete?" : <Trash2Icon size={13} />}
+              </button>
+            </div>
+          ))}
+        </>
       )}
-
-      {(list ?? []).map((s) => (
-        <div className="db-snap-row" key={s.id}>
-          <Clock3Icon size={15} />
-          <div>
-            <strong>{s.root}</strong>
-            <small>
-              <b>{bytes(s.total)}</b> · {fmtDate(s.takenAt)} · {s.folders.toLocaleString()} folders
-            </small>
-          </div>
-          <div className="db-snap-toggle" role="group" aria-label="Before or after">
-            <button type="button" data-active={before === s.id} onClick={() => before === s.id ? setBefore(null) : before && after && before !== s.id ? void runDiff(s.id, after) : setBefore(s.id)}>
-              Before
-            </button>
-            <button type="button" data-active={after === s.id} onClick={() => after === s.id ? setAfter(null) : before && after !== s.id ? void runDiff(before, s.id) : setAfter(s.id)}>
-              After
-            </button>
-          </div>
-          {before && after && (
-            <button type="button" className="db-outline compact" style={{ width: "auto" }} onClick={() => void runDiff(before, after)} disabled={diffing}>
-              {diffing ? "Diffing…" : "Compare"}
-            </button>
-          )}
-          <button
-            type="button"
-            className={`db-icon-button ${armDel === s.id ? "db-del-armed" : ""}`}
-            style={armDel === s.id ? { width: "auto", height: 30, padding: "0 10px", fontSize: 11 } : { width: 30, height: 30 }}
-            aria-label={armDel === s.id ? `Confirm delete snapshot ${s.id}` : `Delete snapshot ${s.id}`}
-            title={armDel === s.id ? "Click again to delete permanently" : "Delete snapshot"}
-            onClick={() => (armDel === s.id ? void del(s.id) : setArmDel(s.id))}
-            onBlur={() => armDel === s.id && setArmDel(null)}
-          >
-            {armDel === s.id ? "Delete?" : <Trash2Icon size={13} />}
-          </button>
-        </div>
-      ))}
 
       {before && after && (
         <div>
-          <div className="db-tab-head" style={{ marginTop: 22, marginBottom: 6 }}>
+          <div className="db-tab-head db-changes-head">
             <div>
-              <h1 style={{ fontSize: 17 }}>Changes</h1>
+              <h1 className="db-changes-title">Changes</h1>
               <span className="db-tab-sub">
                 {diff ? (
                   <>
@@ -202,8 +207,7 @@ export function SnapshotsView() {
             </div>
           )}
           {diffing && (
-            <div className="db-loading-block">
-              <Spinner size={16} />
+            <div className="db-loading-block" role="status">
               <span>Loading both snapshots…</span>
             </div>
           )}

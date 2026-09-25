@@ -54,6 +54,26 @@
   padding: 22px 24px 40px;
   animation: db-fade-up var(--fade) ease both;
 }
+/* First-load skeleton container (loading system v2) — rows adopt the
+ * tab's card rhythm so the swap to real rows causes no reflow. */
+.db-tab-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.db-tab-skeleton .db-skeleton-row {
+  padding: 10px 0;
+}
+/* Snapshots "Changes" section head: same geometry the inline styles
+ * hardcoded (margin 22/6 + 17px title) — now tokenized. */
+.db-changes-head {
+  margin-top: 22px;
+  margin-bottom: 6px;
+}
+.db-changes-head .db-changes-title {
+  font-size: 17px;
+}
 .db-tab-head {
   display: flex;
   align-items: center;
@@ -163,6 +183,14 @@
   border: 1px solid var(--border);
   background: var(--card);
   color: var(--text-secondary);
+  cursor: pointer;
+}
+/* Staging disabled (another copy is kept): reads inert, is inert —
+ * focusable=false, aria-disabled, no hover affordance. */
+.db-keep-tag.stage.is-disabled {
+  cursor: default;
+  opacity: var(--disabled-opacity);
+  pointer-events: none;
 }
 .db-keep-tag.stage:hover {
   border-color: color-mix(in oklab, var(--ink) 55%, transparent);
@@ -277,11 +305,11 @@
   background: var(--chip);
 }
 .db-app-detail .db-app-detail-row > span {
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-weight: 620;
   font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.09em;
 }
 .db-app-detail .db-app-detail-row > div {
   font: 10.5px/1.5 var(--font-mono);
@@ -306,16 +334,23 @@
   background: var(--card);
   padding: 16px 18px 14px;
 }
+/* Monitor warm-up skeletons (loading system v2): caption line, big
+ * figure, sparkline strip — the real card's anatomy. */
+.db-mon-skeleton {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
 .db-mon-card header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-size: 10.5px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.09em;
 }
 .db-mon-card header svg {
   color: var(--text-tertiary);
@@ -522,7 +557,7 @@
 }
 .db-snap-row strong {
   display: block;
-  font: 11px/1.5 var(--font-mono);
+  font: 10.5px/1.5 var(--font-mono);
   font-weight: 570;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -627,5 +662,26 @@
   }
   .db-procs-row {
     grid-template-columns: minmax(120px, 1.6fr) 52px 62px 78px;
+  }
+}
+
+/* ── Large canvases (≥1720px): the wide end used to have NO strategy —
+ * two monitor cards stretched to ~900px each (sparklines distorted,
+ * scan-lines ran marathons). A third column restores card proportions
+ * at exactly the width where two columns stop making sense
+ * (1720 − 312 sidebar − 344 inspector ≈ 1064px main ≈ 3×316px). */
+@media (min-width: 1720px) {
+  .db-mon-grid {
+    grid-template-columns: repeat(3, minmax(300px, 1fr));
+  }
+}
+/* ≥2120px (4K-class): process rows get more air; the name column
+ * breathes instead of the row stretching to absurd line lengths. */
+@media (min-width: 2120px) {
+  .db-procs-row {
+    grid-template-columns: minmax(320px, 2fr) 84px 96px 120px;
+  }
+  .db-tab {
+    padding-inline: 32px;
   }
 }

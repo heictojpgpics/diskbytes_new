@@ -1,7 +1,7 @@
 /**
  * List mode (spec §7.9): virtualized expandable outline — icon, name,
- * mini share-of-parent bar, %, size; disclosure triangles only for
- * non-empty folders; 500 children per level cap.
+ * mini share-of-parent bar, %, items, size; disclosure triangles only
+ * for non-empty folders; 500 children per level cap.
  */
 import { useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -9,7 +9,7 @@ import { ChevronRightIcon, FolderIcon, LockKeyholeIcon, CloudIcon } from "../../
 import { categoryIcon } from "../../components/Icon";
 import { getListChildren, type ListRowData } from "../../viz/exploreIpc";
 import { bytes } from "../../lib/format";
-import { Spinner } from "../../components/buttons";
+import { Spinner, SkeletonRows } from "../../components/buttons";
 import { useArrowNav } from "../../lib/useArrowNav";
 
 interface FlatRow extends ListRowData {
@@ -37,6 +37,13 @@ export function ListMode(props: ListModeProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const rebuild = async () => {
+    // Guard against concurrent walks: rapid key changes (folder hops)
+    // and quick expand/collapse clicks used to run overlapping async
+    // walks where the LAST-RESOLVED tree won over the last-requested —
+    // stale rows could render under a newer folder. Track the newest
+    // request and drop every other walk's result.
+    rebuildSeq.current += 1;
+    const seq = rebuildSeq.current;
     try {
       const children = await getListChildren(props.generation, props.folder, props.filter);
       let out: FlatRow[] = [];
@@ -50,11 +57,14 @@ export function ListMode(props: ListModeProps) {
         }
       };
       await walk(props.folder, 0);
+      if (seq !== rebuildSeq.current) return; // superseded
       setTree(out);
     } catch {
+      if (seq !== rebuildSeq.current) return; // superseded
       setTree([]);
     }
   };
+  const rebuildSeq = useRef(0);
 
   const key = `${props.generation}:${props.folder}:${props.filter}`;
   useEffect(() => {
@@ -96,10 +106,27 @@ export function ListMode(props: ListModeProps) {
   });
 
   if (!tree) {
+    // Structure preview: the header + row skeletons reserve the exact
+    // layout (38px rows) so data landing causes ZERO reflow — the old
+    // spinner-in-a-void collapsed the column then re-inflated it.
     return (
-      <div className="db-loading-block">
-        <Spinner />
-        <span>Building outline…</span>
+      <div className="db-list" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div className="list-head">
+          <span aria-hidden="true" />
+          <span aria-hidden="true" />
+          <span>Name</span>
+          <span>Share</span>
+          <span className="is-num">%</span>
+          <span className="is-num">Items</span>
+          <span className="is-num">Size</span>
+        </div>
+        <div ref={scrollRef} className="db-scroll" style={{ flex: 1, overflow: "auto" }}>
+          <SkeletonRows rows={12} />
+          <div className="db-loading-block" role="status">
+            <Spinner size={18} />
+            <span>Building outline…</span>
+          </div>
+        </div>
       </div>
     );
   }
@@ -107,13 +134,13 @@ export function ListMode(props: ListModeProps) {
   return (
     <div className="db-list" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div className="list-head">
+        <span aria-hidden="true" />
+        <span aria-hidden="true" />
         <span>Name</span>
-        <span />
-        <span />
         <span>Share</span>
-        <span>%</span>
-        <span>Items</span>
-        <span>Size</span>
+        <span className="is-num">%</span>
+        <span className="is-num">Items</span>
+        <span className="is-num">Size</span>
       </div>
       <div ref={scrollRef} className="db-scroll" style={{ flex: 1, overflow: "auto" }}>
         <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
@@ -174,6 +201,7 @@ export function ListMode(props: ListModeProps) {
                   <b style={{ width: `${Math.max(2, Math.min(100, row.share * 100))}%`, background: `#${row.color.toString(16).padStart(6, "0")}` }} />
                 </i>
                 <em className="tnum">{(row.share * 100).toFixed(1)}%</em>
+                <span className="db-list-items tnum">{row.isDir ? row.items.toLocaleString() : "—"}</span>
                 <b className="tnum">{bytes(row.size)}</b>
               </button>
             );

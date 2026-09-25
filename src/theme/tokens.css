@@ -79,6 +79,12 @@
   --age-4: #f472b6;
   --age-5: #f87171;
 
+  /* ── Data-layer literals (theme-aware) ──────────────────────────
+   * Monitor memory-map "Compressed" band — amber between used-red and
+   * ink; a data color, not chrome, so it lives with the other data
+   * tokens (dark gets a slightly lifted amber for the panel bg). */
+  --seg-compressed: #f59e0b;
+
   /* ── Shape & motion (spec §14) ────────────────────────────────────── */
   --radius-xs: 6px;
   --radius-s: 8px;
@@ -89,6 +95,52 @@
   --press-opacity: 0.75;
   --spring: 250ms;
   --fade: 160ms;
+
+  /* ── Motion system v2 (one family, harmonized tempo) ───────────────
+   * Durations sit on a 0.5×/0.75×/1×/1.5×/2× ladder anchored at the
+   * 160ms fade; indeterminate loops (spinner 0.92s, shimmer 1.38s,
+   * strip 1.15s) are 5.75×/8.6×/7.2× — one rhythm family, so
+   * concurrent loaders read as a chorus, not a quarrel.
+   * The framer spring presets live in src/lib/motion.ts (JS springs
+   * can't be expressed as CSS vars). */
+  --dur-micro: 120ms; /* menus, chips, hover swaps */
+  --dur-fast: 160ms; /* = --fade: entrances, scrim */
+  --dur-base: 240ms; /* layout settles, scan bar */
+  --dur-slow: 360ms; /* large surfaces, inspector slide */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.5, 0.05, 0.4, 1);
+  --ease-overshoot: cubic-bezier(0.2, 0.9, 0.3, 1.15);
+
+  /* ── Spacing scale (4px base; the half-steps 6/10/14 exist for dense
+   * UI rows) ───────────────────────────────────────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 56px;
+
+  /* ── Focus geometry (ring WIDTH/OFFSET were hardcoded in 4 places;
+   * color already had --focus-ring) ────────────────────────────────── */
+  --focus-w: 2px;
+  --focus-offset: 2px;
+
+  /* ── Status on-colors (white text on used/free fills was hardcoded
+   * 6×) ───────────────────────────────────────────────────────────── */
+  --on-used: #ffffff;
+  --on-free: #ffffff;
+  --on-close: #ffffff;
+
+  /* ── Loading system (v2): skeleton + shimmer speak the surface
+   * language of whichever theme is active ──────────────────────────── */
+  --skeleton: #e9e9ee;
+  --shimmer: rgba(255, 255, 255, 0.65);
+
+  /* ── State opacity (disabled was 0.45/0.5/0.55/0.35 in four files) ── */
+  --disabled-opacity: 0.5;
 
   /* ── Elevation ────────────────────────────────────────────────────── */
   --shadow-1: 0 1px 2px rgba(29, 29, 31, 0.06), 0 1px 3px rgba(29, 29, 31, 0.05);
@@ -113,9 +165,14 @@
   --sidebar-w-compact: 276px;
   --inspector-w-compact: 304px;
 
-  /* ── Density ladder breakpoints (responsive degrade) ──────────────── */
+  /* ── Density ladder breakpoints (responsive degrade) ────────────────
+   * DOCUMENTATION-ONLY constants: media queries cannot consume custom
+   * properties (a CSS spec limitation), so the real queries hardcode
+   * these px values inline. They live here as the single named source
+   * the queries must match — 1280 is the enforced window minimum
+   * (tauri.conf.json minWidth), not 1120. */
   --bp-compact: 1500px;
-  --bp-narrow: 1120px;
+  --bp-narrow: 1280px;
 
   color-scheme: light;
 }
@@ -133,9 +190,13 @@
 
   /* Control affordance — brightened so outline buttons, chips and
    * pickers stay obviously interactive on dark surfaces (panel-adjacent
-   * card fills blend at #52525a; VLM dark audit round 2). */
+   * card fills blend at #52525a; VLM dark audit round 2). #7a7a85 is
+   * the validated outline-button contrast (≈3.4:1 vs panel) — now THE
+   * control border for the whole family (icon buttons, chips, search
+   * capsule previously sat at #606069 ≈ 2.5:1: same family, two
+   * borders). */
   --on-control: #e8e8ed;
-  --control-border: #606069;
+  --control-border: #7a7a85;
   --control-hover: rgba(255, 255, 255, 0.07);
   --control-active: rgba(255, 255, 255, 0.11);
 
@@ -157,6 +218,14 @@
   --free: #30d158;
   --free-soft: rgba(48, 209, 88, 0.14);
   --focus-ring: rgba(255, 122, 92, 0.6);
+
+  /* Loading system v2 (dark): skeletons lift off the panel; the
+   * shimmer is a subtle white wash, not a bright band. */
+  --skeleton: #323234;
+  --shimmer: rgba(255, 255, 255, 0.07);
+
+  /* Data-layer literals (dark): amber lifted for the dark panel. */
+  --seg-compressed: #f5a623;
 
   /* ── Elevation (deeper in dark) ───────────────────────────────────── */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);

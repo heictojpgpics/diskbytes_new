@@ -6,10 +6,8 @@
  * (Reveal / Preview / Focus / Copy Path), and the Add-to-Cleanup
  * toggle (disabled + tooltip for protected items).
  */
-import { useEffect, useState } from "react";
-import {
-  CopyIcon, EyeIcon, FolderIcon, HardDriveIcon, LockKeyholeIcon, SearchIcon, SparklesIcon, Trash2Icon, CheckIcon, CloudIcon,
-} from "../components/Icon";
+import { useEffect, useRef, useState } from "react";
+import { CopyIcon, EyeIcon, ExternalLinkIcon, FolderIcon, HardDriveIcon, LockKeyholeIcon, SparklesIcon, Trash2Icon, CheckIcon, CloudIcon, TONE_KEYS } from "../components/Icon";
 import { categoryIcon } from "../components/Icon";
 import { getNodeDetails, type NodeDetailsData } from "../viz/exploreIpc";
 import { invoke } from "../lib/ipc";
@@ -20,7 +18,8 @@ import { useExploreStore } from "../state/explore";
 import { useScanStore } from "../state/scan";
 import { useCleanupStore } from "../state/cleanup";
 
-const TONES = ["blue", "mint", "violet", "amber", "rose", "green", "sky", "slate"];
+// One tone order app-wide (Icon.tsx is the source).
+const TONES = TONE_KEYS;
 
 /** Stable tone for an item: hash the PATH (stable across scans and
  * generations). The old id-modulo made the same folder change icon
@@ -32,6 +31,10 @@ function toneFor(path: string): string {
 }
 
 export function InspectorPanel({ onPreview }: { onPreview: (id: number) => void }) {
+  // Copy-path transient feedback (mirrors OutlineButton confirm swap);
+  // timer-tracked so rapid repeat clicks never cut the feedback short.
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<number | null>(null);
   const generation = useScanStore((s) => s.generation);
   const status = useScanStore((s) => s.status);
   const currentFolder = useExploreStore((s) => s.currentFolder);
@@ -221,11 +224,15 @@ export function InspectorPanel({ onPreview }: { onPreview: (id: number) => void 
       )}
 
       <div className="db-inspector-actions">
+        {/* Icon metaphors match the context menu: eye = Preview (look),
+         * external-link = Reveal (open in Explorer). The inspector had
+         * them SWAPPED — the same two concepts showed opposite icons
+         * on two surfaces one click apart. */}
         <button type="button" className="db-outline" onClick={() => void invoke("reveal_in_explorer", { generation, id: details.id }).catch(() => undefined)}>
-          <EyeIcon size={14} /> Reveal
+          <ExternalLinkIcon size={14} /> Reveal
         </button>
         <button type="button" className="db-outline" disabled={details.isCloud} onClick={() => onPreview(details.id)} title={details.isCloud ? "Cloud placeholders are never previewed" : "Preview"}>
-          <SearchIcon size={14} /> Preview
+          <EyeIcon size={14} /> Preview
         </button>
         <button
           type="button"
@@ -243,9 +250,12 @@ export function InspectorPanel({ onPreview }: { onPreview: (id: number) => void 
           onClick={() => {
             void invoke("copy_path", { generation, id: details.id }).catch(() => undefined);
             void navigator.clipboard?.writeText(details.path).catch(() => undefined);
+            setCopied(true);
+            if (copyTimer.current != null) window.clearTimeout(copyTimer.current);
+            copyTimer.current = window.setTimeout(() => setCopied(false), 1200);
           }}
         >
-          <CopyIcon size={14} /> Copy Path
+          {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />} {" "}{copied ? "Copied" : "Copy Path"}
         </button>
       </div>
 

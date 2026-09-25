@@ -601,3 +601,45 @@ Stage Summary:
 - Quick Wins is now the third major mock↔engine parity port (after bubbles + mindmap); the pattern keeps proving out: every fabricated mock surface hides production bugs
 - Gates: tsc 0, vitest 48/48, build OK
 - Next: CI verify (0b7c38f), License dialog flow, Duplicates deep verification, hover-chip edge cases, wave-10 worklog
+
+---
+Task ID: uiux-1
+Agent: main
+Task: DiskBytes UI/UX production polish — session start (P0 fixes + loading v2)
+
+Work Log:
+- Cloned heictojpgpics/DiskBytes; 3 parallel deep audits (CSS system, viz engine, shell/components)
+- P0 FIXED: CleanupQueuePopover confirm-dialog outside-close bug (commit path was unreachable) + real AnimatePresence exit
+- P0 FIXED: treemap HEADER cells (kind 4) now rendered (fill+shade+name+size), hit-tested, ring-pathed; mock emits headers for prod parity
+- P0 FIXED: ListMode 7-vs-6 column mismatch — Rust ListRow gains `items` (child_count), TS/mock parity, 7 aligned columns + numeric right-align
+- P0 FIXED: dead tokens var(--accent)/--mono)/--danger) → --ink/--font-mono/--used; context-menu keyboard focus visible
+- P0 FIXED: invalidateLayouts+invalidateHoverCache wired on scan-done; paint epoch guard; height-only canvas resize; DPR migration watcher; uiFont cached per pass
+- P0 FIXED: AgeMap stale→infinite spinner; AppErrorBoundary componentStack; hover-chip sequence guard; ListMode rebuild race guard
+- LOADING v2: unified system — one rhythm family; SkeletonRows/Skeleton/LoadingBlock components; skeletons in List/TopSizes/Folders/Apps/Monitor/Snapshots; scan visual v2 (dual-orbit sweep + breathing core); reduced-motion hierarchy fixed (spinner exempted from kill switch with documented rationale)
+- Design tokens v2: spacing scale, motion tokens (--dur-*/--ease-*), focus geometry, on-status colors, skeleton/shimmer, disabled opacity; --bp-narrow corrected 1120→1280
+- vizUi: per-mode depth memory + sticky Top Sizes scope; TopSizes honest bar floor 9%→2.5% + stale state
+- Sunburst: separators now per distinct ring (was ring-1 only)
+
+Stage Summary:
+- All 54 tests + tsc + build green throughout
+- Next: motion presets module, button system dedup, CSS consistency sweep, canvas keyboard access, responsive 1280–2560, overlays polish, review pass 2, VLM visual audit, repo push + CI
+
+---
+Task ID: uiux-2
+Agent: main
+Task: UI/UX polish — consistency sweep, VLM round 1 fixes, review pass 2
+
+Work Log:
+- Motion: SPRING_UI/SPRING_POP/SPRING_TOAST/FADE_SWAP/EXIT_FAST presets (src/lib/motion.ts); MotionConfig reducedMotion="user" at App root; all 7 framer usages migrated
+- Button system: .auto/.danger variants; 15 inline width/padding patches replaced across 6 files; dark --control-border unified at #7a7a85 (was forked #606069 vs hardcoded)
+- Consistency: caption tracking → 0.09em (12 rules); mono path text → 10.5px/1.5 (6 rules); selection rings → 2.5px ink 55%; 9 caption contrast bumps tertiary→secondary; focus geometry + on-status colors tokenized
+- Overlays: PreviewOverlay enter animation (was the one overlay without one); HoverChip 90ms fade; role=menuitem on all menu buttons; useMenuBehavior shared hook (keyboard+outside-close+blur) for both menus
+- Canvas: keyboard nav on all 5 canvas modes (useArrowNav over top-200 cells); ring fade-in 120ms rAF; HEADER cells hit-tested + ring-pathed
+- a11y: Duplicates Stage chips Space+aria-disabled; ⌘K modal guard; queue button aria-haspopup/expanded; Eye/ExternalLink icon metaphor unified with context menu; Inspector copy feedback
+- VLM round 1 (17 screenshots): treemap HEADER + List columns VERIFIED FIXED visually; applied hero button parity, dupes copy dedup, FILES inline empty, quick-wins density, clear-button contrast
+- Review pass 2 (agent): found canvas nav dead via [class*="overlay"] matching .db-overlay-canvas — FIXED with :not(canvas); fixed dead 400-cap logic; DPR watcher re-arm; canvas remount repaint; AgeMap stale gate; popover scrim orphan; vizUi outgoing-depth persist; copied timer ref; compact.auto padding; menu blur close
+- Responsive: ≥1720px monitor 3-col; ≥2120px process row scale; popover height clamp; toolbar wrap at 1280; 1180→1280 query fix; tabs.css skeleton classes
+
+Stage Summary:
+- tsc + 54 tests + build green; keyboard nav verified live in browser (selection ring appears)
+- Next: final screenshots + VLM round 2, repo diskbytes_new + push + CI validation

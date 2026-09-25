@@ -8,9 +8,11 @@ import { useEffect, useState } from "react";
 import { FolderIcon, FileIcon } from "../../components/Icon";
 import { getTopSizes, type TopScopeId, type TopSizesData } from "../../viz/exploreIpc";
 import { bytes } from "../../lib/format";
+import { SkeletonRows } from "../../components/buttons";
 import { useArrowNav } from "../../lib/useArrowNav";
+import { useVizUiStore } from "../../state/vizUi";
 
-const TONES = ["blue", "mint", "violet", "amber", "rose", "green", "sky", "slate"];
+const TONES = ["blue", "mint", "violet", "amber", "rose", "green", "sky", "slate"] as const;
 
 const SCOPES: { id: TopScopeId; label: string }[] = [
   { id: "in-folder", label: "In this folder" },
@@ -30,19 +32,28 @@ export interface TopSizesModeProps {
 }
 
 export function TopSizesMode(props: TopSizesModeProps) {
-  const [scope, setScope] = useState<TopScopeId>("in-folder");
+  // Scope lives in the vizUi store: switching modes/tabs and returning
+  // used to reset it to "In this folder" every remount.
+  const scope = useVizUiStore((s) => s.topScope);
+  const setScope = useVizUiStore((s) => s.setTopScope);
   const [data, setData] = useState<TopSizesData | null>(null);
+  const [stale, setStale] = useState(false);
 
   const key = `${props.generation}:${props.folder}:${scope}:${props.filter}`;
 
   useEffect(() => {
     let disposed = false;
+    // No silent catch: a dropped stale response used to render the
+    // EMPTY state ("Nothing to rank yet") — a lie during a rescan.
+    // Show the honest reload state instead.
+    setStale(false);
+    setData(null);
     void (async () => {
       try {
         const d = await getTopSizes(props.generation, props.folder, scope, props.filter);
         if (!disposed) setData(d);
       } catch {
-        /* stale generation — dropped (spec §9) */
+        if (!disposed) setStale(true);
       }
     })();
     return () => {
@@ -79,9 +90,12 @@ export function TopSizesMode(props: TopSizesModeProps) {
         </div>
         <span className="db-shown tnum">{rows.length} shown</span>
       </div>
-      {rows.length === 0 ? (
+      {!data && stale && <div className="db-substate">Scan changed — reloading…</div>}
+      {!data && !stale && <SkeletonRows rows={10} className="db-ranked-skeleton" />}
+      {data && rows.length === 0 && (
         <div className="db-substate">{props.filter ? `Nothing matches “${props.filter}”.` : "Nothing to rank yet."}</div>
-      ) : (
+      )}
+      {data && rows.length > 0 && (
         <div className="db-ranked">
           {rows.map((r, i) => {
             const share = (r.size / max) * 100;
@@ -105,7 +119,7 @@ export function TopSizesMode(props: TopSizesModeProps) {
                 <Icon size={16} />
                 <span
                   className={`rank-bar tone-${TONES[i % TONES.length]}`}
-                  style={{ ["--share" as string]: `${Math.max(9, share)}%` }}
+                  style={{ ["--share" as string]: `${Math.max(2.5, share)}%` }}
                 >
                   <span>
                     <strong>{r.name}</strong>

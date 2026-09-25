@@ -5,16 +5,17 @@
  * review-only rows, "Show in Explorer"). Categories come from the
  * already-built tree (no extra disk pass).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArchiveIcon, AppWindowIcon, BoxIcon, BubblesIcon, CheckIcon, ChevronRightIcon,
   Clock3Icon, DownloadIcon, ExternalLinkIcon, FileImageIcon, FileCode2Icon,
   FileVideoIcon, FlameIcon, GlobeIcon, HammerIcon, HardDriveIcon, PackageOpenIcon,
-  RefreshCwIcon, SmartphoneIcon, type AnyIcon,
+  RefreshCwIcon, SmartphoneIcon, type AnyIcon, TONE_KEYS,
 } from "../components/Icon";
 import { SectionCaption } from "../components/buttons";
 import { invoke } from "../lib/ipc";
 import { bytes } from "../lib/format";
+import { useMenuBehavior } from "../lib/useMenuBehavior";
 import { useExploreStore } from "../state/explore";
 import { useScanStore } from "../state/scan";
 import { useViewStore } from "../state/view";
@@ -61,7 +62,9 @@ const ICONS: Record<string, AnyIcon> = {
   clock: Clock3Icon,
 };
 
-const TONES = ["violet", "rose", "green", "amber", "blue", "sky", "violet", "slate"];
+// One tone order app-wide (Icon.tsx is the source — this local copy
+// had violet twice and dropped mint).
+const TONES = TONE_KEYS;
 
 export function QuickWinsSection() {
   const status = useScanStore((s) => s.status);
@@ -88,21 +91,11 @@ export function QuickWinsSection() {
     };
   }, [status, generation]);
 
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    const esc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenu(null);
-    };
-    window.addEventListener("click", close);
-    window.addEventListener("blur", close);
-    window.addEventListener("keydown", esc);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("blur", close);
-      window.removeEventListener("keydown", esc);
-    };
-  }, [menu]);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Shared menu behavior (keyboard + outside-close + focus) — the old
+  // local version had no arrow keys and closed on click+blur (survived
+  // a drag that started inside and ended outside).
+  useMenuBehavior(menuRef, menu != null, () => setMenu(null));
 
   if (status !== "done" || !rows || rows.length === 0) return null;
   const total = rows.reduce((a, r) => a + r.size, 0);
@@ -138,14 +131,13 @@ export function QuickWinsSection() {
       <SectionCaption right={total > 0 ? bytes(total) : undefined}>
         <span>Quick Wins</span>
       </SectionCaption>
-      <div className="db-quick-list" role="list">
+      <div className="db-quick-list">
         {rows.map((row, i) => {
           const Icon = ICONS[row.icon] ?? BoxIcon;
           return (
             <button
               key={row.id}
               type="button"
-              role="listitem"
               onClick={() => goto(row)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -173,9 +165,10 @@ export function QuickWinsSection() {
       </div>
 
       {menu && (
-        <div className="db-context" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: Math.min(menu.y, window.innerHeight - 140) }} role="menu">
+        <div ref={menuRef} className="db-context" style={{ left: Math.min(menu.x, window.innerWidth - 230), top: Math.min(menu.y, window.innerHeight - 140) }} role="menu">
           <button
             type="button"
+            role="menuitem"
             className="db-ctx-item"
             disabled={menu.row.reviewOnly}
             title={menu.row.reviewOnly ? (menu.row.extra ?? "Review-only row — Add all is disabled") : undefined}
@@ -187,6 +180,7 @@ export function QuickWinsSection() {
           <div className="db-ctx-sep" />
           <button
             type="button"
+            role="menuitem"
             className="db-ctx-item"
             onClick={() => {
               if (menu.row.biggestMatch != null && menu.row.biggestMatch > 0) {
