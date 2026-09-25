@@ -360,6 +360,9 @@ pub async fn find_duplicates(
     // this run is cancelled iff the shared counter moves off the value
     // it held at start; a cancel pressed before this line counts for
     // THIS run (the UI only cancels while a run is busy).
+    #[allow(clippy::print_stderr)] // liveness tracing (doc 07 perf-watchdog pattern)
+    eprintln!("[dupes] start gen={generation} tree_nodes={}", tree.len());
+    let t_start = Instant::now();
     let ctl = Arc::new(DupesCtl::live(app, Arc::clone(&state.dupes_cancel)));
     // Ticker: samples the atomics every TICK_MS until the compute
     // resolves. Detached — the last tick may land ≤200 ms after the
@@ -377,10 +380,18 @@ pub async fn find_duplicates(
         }
     });
     let compute_ctl = Arc::clone(&ctl);
-    let result =
-        tauri::async_runtime::spawn_blocking(move || compute_dupes(&tree, compute_ctl.as_ref()))
-            .await
-            .map_err(|e| format!("dupes thread failed: {e}"))?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        #[allow(clippy::print_stderr)]
+        eprintln!("[dupes] spawn_blocking task ENTERED");
+        let out = compute_dupes(&tree, compute_ctl.as_ref());
+        #[allow(clippy::print_stderr)]
+        eprintln!("[dupes] compute finished at {:?}", ctl.started.elapsed());
+        out
+    })
+    .await
+    .map_err(|e| format!("dupes thread failed: {e}"))?;
+    #[allow(clippy::print_stderr)]
+    eprintln!("[dupes] await resolved at {:?}", t_start.elapsed());
     finished.store(true, Ordering::Relaxed);
     // Terminal event: the UI's busy row settles on "done" (or the
     // invoke's Err lands first — either way the window closes).
@@ -428,6 +439,11 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
         }
     });
     let total_files = candidates.len() as u64;
+    #[allow(clippy::print_stderr)]
+    eprintln!(
+        "[dupes] collected {total_files} candidates at {:?}",
+        ctl.started.elapsed()
+    );
 
     // Pass 1: size buckets (candidate level).
     let mut by_size: HashMap<u64, Vec<usize>> = HashMap::new();
@@ -466,6 +482,13 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
     if ctl.cancelled() {
         return Err("cancelled".into());
     }
+
+    #[allow(clippy::print_stderr)]
+    eprintln!(
+        "[dupes] prefix pass done: {} targets at {:?}",
+        prefix_targets.len(),
+        ctl.started.elapsed()
+    );
 
     // (size, prefix digest) → candidates sharing it.
     let mut by_prefix: HashMap<(u64, [u8; 32]), Vec<usize>> = HashMap::new();
@@ -572,6 +595,12 @@ fn finish_pipeline(
         .map(|&i| candidates[i].size)
         .sum();
     ctl.set_phase(PHASE_FULL, full_files, full_bytes);
+    #[allow(clippy::print_stderr)]
+    eprintln!(
+        "[dupes] full pass: {} buckets / {} bytes",
+        survivors.len(),
+        full_bytes
+    );
     let hashed: Vec<HashedFile> = survivors
         .par_iter()
         .flat_map(|((size, prefix_digest), group)| {
