@@ -334,7 +334,7 @@ fn windows_reserved_shape_names_kept_byte_exact() {
             // dots; unix keeps everything).
             let actual: Vec<String> = std::fs::read_dir(&dir)
                 .expect("read staged dir")
-                .filter_map(|e| e.ok())
+                .filter_map(std::result::Result::ok)
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .collect();
             let produced = actual

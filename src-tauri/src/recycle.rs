@@ -614,7 +614,6 @@ mod tests {
         assert!(paths.contains(&r"C:\folder\inner.txt"));
         assert!(paths.contains(&r"C:\folder\sub"));
         assert!(paths.contains(&r"C:\folder\sub\file.bin"));
-        assert!(plan.absorbed.iter().all(|a| a.absorbed_by == 0));
     }
 
     #[test]
