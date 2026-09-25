@@ -140,7 +140,9 @@ struct DupesCtl {
 }
 
 impl DupesCtl {
-    /// A quiet control (no events) — test harness.
+    /// A quiet control (no events) — the Windows E2E test harness (the
+    /// sole consumer); gated so non-Windows test builds never see it.
+    #[cfg(all(test, windows))]
     fn quiet(gen: Arc<AtomicU64>) -> Self {
         Self::with_app(None, gen)
     }
@@ -390,6 +392,7 @@ pub async fn find_duplicates(
 /// is running (the bump only affects runs that latched an older
 /// value). Returns the bumped generation.
 #[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // State extraction is the tauri command contract
 pub fn cancel_duplicates(state: State<'_, AppState>) -> u64 {
     state.dupes_cancel.fetch_add(1, Ordering::SeqCst) + 1
 }
@@ -490,7 +493,7 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
             .into_iter()
             .filter(|(_, g)| g.len() >= 2)
             .collect();
-        return finish_pipeline(tree, ctl, candidates, total_files, survivors);
+        return finish_pipeline(tree, ctl, &candidates, total_files, &survivors);
     }
     let mid_bytes: u64 = mid_candidates.len() as u64 * 2 * SAMPLE;
     ctl.set_phase(PHASE_SCREEN, mid_candidates.len() as u64, mid_bytes);
@@ -541,7 +544,7 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
             (kept.len() >= 2).then_some(((size, digest), kept))
         })
         .collect();
-    finish_pipeline(tree, ctl, candidates, total_files, survivors)
+    finish_pipeline(tree, ctl, &candidates, total_files, &survivors)
 }
 
 /// Pass 3 + ranking: shared tail for both routes (with/without the
@@ -553,9 +556,9 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
 fn finish_pipeline(
     tree: &Tree,
     ctl: &DupesCtl,
-    candidates: Vec<Candidate>,
+    candidates: &[Candidate],
     total_files: u64,
-    survivors: Vec<Bucket>,
+    survivors: &[Bucket],
 ) -> Result<DupesResult, String> {
     let full_files: u64 = survivors
         .iter()
@@ -781,7 +784,7 @@ mod tests {
                 .iter()
                 .map(|g| (g.size, g.count, g.wasted))
                 .collect();
-            by_size.sort();
+            by_size.sort_unstable();
             assert_eq!(
                 by_size,
                 vec![(300 * 1024, 2, 300 * 1024), (8 * mib, 3, 2 * 8 * mib),],
