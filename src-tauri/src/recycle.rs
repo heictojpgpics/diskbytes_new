@@ -105,6 +105,11 @@ pub struct CommitPlan {
 pub struct AbsorbedItem {
     /// The absorbed (nested) item's path.
     pub path: String,
+    /// Index into `CommitPlan::items` of the absorbing root (metadata
+    /// for future UI grouping; read by tests — clippy's dead-code scan
+    /// intentionally ignores test reads).
+    #[allow(dead_code)]
+    pub absorbed_by: usize,
 }
 
 /// Pure planning pass (spec §9: "Sort paths shortest-first. Items nested
@@ -121,15 +126,22 @@ pub fn plan_commit(items: Vec<StagedPath>) -> CommitPlan {
     let mut keep: Vec<StagedPath> = Vec::with_capacity(sorted.len());
     let mut absorbed: Vec<AbsorbedItem> = Vec::new();
     for item in sorted {
-        let nested = keep.iter().any(|k| {
-            item.path.len() > k.path.len()
+        let mut absorbed_by: Option<usize> = None;
+        for (i, k) in keep.iter().enumerate() {
+            let nested = item.path.len() > k.path.len()
                 && (item.path.starts_with(&k.path)
-                    && item.path.as_bytes().get(k.path.len()) == Some(&b'\\'))
-        });
-        if nested {
-            absorbed.push(AbsorbedItem { path: item.path });
-        } else {
-            keep.push(item);
+                    && item.path.as_bytes().get(k.path.len()) == Some(&b'\\'));
+            if nested {
+                absorbed_by = Some(i);
+                break;
+            }
+        }
+        match absorbed_by {
+            Some(i) => absorbed.push(AbsorbedItem {
+                path: item.path,
+                absorbed_by: i,
+            }),
+            None => keep.push(item),
         }
     }
     CommitPlan {
@@ -539,7 +551,9 @@ mod windows_pass {
 
 #[cfg(target_os = "macos")]
 mod mac_pass {
-    use super::*;
+    // Explicit imports (no `use super::*` glob): the wildcard hid what
+    // the mac pass actually consumes from the parent module.
+    use super::{FailedItem, StagedPath, TrashedItem};
     use crate::platform::os::recycle_to_trash;
 
     /// The macOS Trash pass: NSWorkspace.recycleURLs — the same
@@ -609,11 +623,13 @@ mod tests {
         assert_eq!(plan.items.len(), 1);
         assert_eq!(plan.items[0].path, r"C:\folder");
         assert_eq!(plan.absorbed.len(), 3);
-        // The absorbed paths are preserved for UI accounting.
+        // The absorbed paths are preserved for UI accounting, each
+        // pointing at the absorbing root's index.
         let paths: Vec<&str> = plan.absorbed.iter().map(|a| a.path.as_str()).collect();
         assert!(paths.contains(&r"C:\folder\inner.txt"));
         assert!(paths.contains(&r"C:\folder\sub"));
         assert!(paths.contains(&r"C:\folder\sub\file.bin"));
+        assert!(plan.absorbed.iter().all(|a| a.absorbed_by == 0));
     }
 
     #[test]

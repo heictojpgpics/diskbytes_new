@@ -603,6 +603,10 @@ Stage Summary:
 - Next: CI verify (0b7c38f), License dialog flow, Duplicates deep verification, hover-chip edge cases, wave-10 worklog
 
 ---
+
+**MERGE NOTE (this session):** refactored Rust core from heictojpgpics/DiskBytes merged into diskbytes_new. UI/UX work preserved intact. Conflicts resolved: platform.rs/recycle.rs → theirs (superset, CI-green); mac.rs/win.rs monoliths → theirs (deleted, replaced by 16 submodules); cleanup.rs → both (their lint attrs + our clear_all_caches dedup). Below are both session logs.
+
+---
 Task ID: uiux-1
 Agent: main
 Task: DiskBytes UI/UX production polish — session start (P0 fixes + loading v2)
@@ -684,3 +688,119 @@ Work Log:
 Stage Summary:
 - Repo: github.com/heictojpgpics/diskbytes_new (main)
 - Deliverables: 23 commits of polish, P0 bug fixes, loading v2, design-system v2, canvas keyboard nav + HEADER rendering, cross-platform CI green
+---
+
+Task ID: 26
+Agent: main (Super Z)
+Task: REFACTORING PROJECT (sessions 7-8, backfilled from git history — the session crashed before logging) — safety net → bug waves → layout dedup → platform split
+
+Work Log:
+- SETUP: cloned DiskBytes + 6 reference repos (rust-best-practices, rust-skills, disktree, dua-cli, WinMemoryCleaner, cleaner) + 3 articles (JetBrains rewrite, kvark optimization gist, oneuptime memory). 4 parallel deep-read agents produced 80 concrete findings; baseline safety net verified green (141/141, fmt, clippy)
+- WAVE 1 (16 production bugs, each own commit + regression tests): surgery corruption ×3 (arena/dir_expects index conflation, file count, zero-on_disk filter) + root guard; layout ×3 (squarify u64 overflow, off-canvas flame members, sunburst arc spill); app-layer ×7 (generation authority, race-free surgery swap, scan lifecycle, apps cache inflight inversion, recycle accounting, unicode path_matches, turbo cancel + capped preview); platform ×3 (mac network-counter UB via ifa_data, mac filename mojibake, rusage units)
+- WAVE 1e quickwins: dead code removal, static browser table (killed a Box::leak), dead VM prelude, write-only set
+- CI EXPANSION: criterion benchmark suite, real-filesystem platform tests, cross-platform Test Matrix workflow (windows-latest + macos-latest + macos-14 arm64), full codebase mirrored to heictojpgpics/DiskBytes (the heicfast remote rejected the token's account)
+- WAVE 3 property tests: proptest suite (~4,700 generated cases) found 4 MORE real bugs (run-list decoder phantom zero-length runs, Snapshot::total() non-saturating overflow, squarify f32 precision collapse dropping trailing siblings silently, second squarify drop path at line 214)
+- WAVE 2c layout dedup: five engines share layout/mod.rs helpers; groups twins made structurally parity (compile-time assertions); 3 parity bugs fixed (picket-fence gap port, mindmap root label)
+- WAVE 2a/2b PLATFORM SPLIT (pure moves): win.rs 2497 lines → win/{apps,com,dir,license,monitor,recycle,sysinfo,turbo}; mac.rs 2108 lines → mac/{apps,dir,ffi,license,monitor,objc,shell,sysinfo}. Glob re-exports keep the crate::platform::os::X surface byte-identical. PR #1 open, CI iterating
+
+Stage Summary:
+- main @ 7a05909: 16 bug-fix commits + benches + property suite + platform tests + layout dedup — all pushed, Test Matrix was green except long-path/Win32-normalization tests (fixed in 7a05909)
+- refactor/platform-split @ 11614a0: both splits done but CI failing (93 mac errors: FFI visibility after module boundaries cut; 3 win errors: missing imports)
+- Session crashed mid-"three surgical fixes" (the FFI visibility distribution). Recovered in session 9 (see Task 27)
+
+---
+Task ID: 27
+Agent: main (Super Z)
+Task: SESSION 9 RECOVERY — rebuild environment, close out the platform-split CI loop
+
+Work Log:
+- Workspace was wiped by the session restart (no DiskBytes, no reference repos, no Rust). All work survived on GitHub (the frequent-push strategy worked exactly as designed). Reinstalled Rust 1.98.1 + clippy + rustfmt + cross targets; re-cloned DiskBytes from heictojpgpics mirror
+- Recovered full failure map from CI logs: mac = 93 errors (E0425 missing extern fns + E0616 private FFI struct fields + E0624 Block1::new + E0599/E0433 KnownFolder/Platform in tests); win = 3 E0425 + unused imports
+- KEY TOOLING WIN: built a local cross-check harness — a scratch crate that path-includes src-tauri/src/platform with only its real deps (windows 0.62 same features, objc2, png, diskbytes-core). cargo check --all-targets for x86_64-pc-windows-msvc AND aarch64-apple-darwin runs ON LINUX (aws-lc-sys blocks full app-crate cross-checks; the platform seam doesn't need it). CI error lists reproduce exactly locally — the blind-iteration loop (5 CI rounds yesterday) is now a local sub-minute loop
+- FIXES (5e7be38): pub(crate) on all ffi.rs mirror-struct fields; per-file explicit extern-fn imports across mac submodules; Block1::new pub(crate); mod.rs drops itemless shell::* glob + visibility-mismatched ffi::*/objc::* globs (tests import from submodules); win import fixes (monitor shadowed GetDriveTypeW + INVALID_FILE_ATTRIBUTES; recycle/sysinfo missing GetDriveTypeW/GetDiskFreeSpaceExW/GetVolumeInformationW); recycle_seam doc reunited; split-artifact cleanups (dup ffi header, orphaned section comments, stale win/mod.rs header)
+- Gates at push: xcheck windows 0/0, xcheck apple 0/0 (was 93 errors + 8 warnings), core fmt+clippy clean, 181/181 tests
+- MISTAKE CAUGHT: one commit landed in the wrong repo (shell cwd reset between calls put xcheck build artifacts into the parent container repo — no origin, no harm); reset and recommitted via git -C. Lesson: ALWAYS git -C /home/z/my-project/DiskBytes
+
+Stage Summary:
+- refactor/platform-split @ 5e7be38 pushed; CI validating on real windows/macos runners now
+- The xcheck harness lives at /home/z/my-project/xcheck (untracked, reusable for every future platform-seam change)
+- Next: CI verify → merge PR #1 → Wave 2 remaining items (commands/ oversized modules, state.rs) → per-repo learning cycles (disktree/dua-cli/WinMemoryCleaner/cleaner, 20 todos each) → mass platform test expansion
+
+---
+Task ID: 28
+Agent: main (Super Z)
+Task: SESSION 9 (cont.) — PR #1 merged, learning-cycle implementations, Wave 5 start
+
+Work Log:
+- CI GREEN on 96c08ce (all 10 jobs: static gates, NSIS bundle, core+platform suites on windows/macos-latest/macos-14, benchmarks) → PR #1 squash-merged as 3b2c5ee; main now carries the platform split
+- REPO CYCLES COMPLETE: all 4 deep-reads redone post-crash (disktree, dua-cli, WinMemoryCleaner, cleaner) — 80 findings triaged into docs/LEARNINGS-BACKLOG.md (implemented / roadmap / rejected-with-reason / hygiene policies)
+- IMPLEMENTED from learnings: mac error ladder 5f5937e (EINTR retry, EACCES→list-only attrs, ENOTSUP-class→std fallback with du-parity sizing; 4 tests incl. chmod-0444 E2E); quickwins catalog invariants 418aa91 (never-clean roots, no bare env roots, single components, known ids, cache-leaf-only browsers, VM review-only, cap; saturating size fold); lint-rationale on the last 3 undocumented allows 1ea56ae
+- WAVE 5 START: the win record walk was inline in list_dir (zero parser tests vs mac's 12) — extracted walk_records (pure, identical semantics incl. partial-entries-on-violation; dropped the too_many_lines allow) + 12-test record-contract suite with a REAL-syscall E2E (d168cec)
+- Terminal-corruption mystery solved: '#ust_use]' sightings were the renderer eating '[m' as ANSI-reset — byte-count ground truth proved all files clean
+- Terminal-escape lesson + cwd-reset lesson both now handled (git -C everywhere)
+
+Stage Summary:
+- main @ d168cec: split + mac ladder + invariants + win record suite — all locally gated (xcheck 0/0 both targets, core 188/188, clippy, fmt), CI running
+- Test inventory: 188 core + ~4,700 property cases + 13 real-FS platform + 16 mac app + 13 win app (1 layout + 12 new record-walk)
+- Next: core platform test expansion (hardlinks, sparse, NFC/NFD, churn, 5000 siblings), CI verify, benchmarks wave
+
+---
+Task ID: 29
+Agent: main (Super Z)
+Task: SESSION 9 (cont. 2) — Wave 5 test expansion + the CI convergence loop that found real bugs
+
+Work Log:
+- WAVE 5 LANDED: 8 device-behavior tests in core platform suite (hardlinks, sparse+stat ground truth, NFC/Hangul normalization byte-exact vs read_dir, control-char names, 5000 siblings, future mtimes, churn-during-scan, empty root) — 87b4dd4; 196 core tests total
+- 12-test win record-walk suite + walk_records extraction — d168cec
+- THE CI CONVERGENCE LOOP (each round a real find):
+  - R1: build_record dropped the NUL for multiple-of-4 name lengths (the list-only test's "degraded.bin" was the first 12-char name); Windows clippy caught 4 style issues in my new tests → d734fcf
+  - R2: the new app-crate clippy gate's FIRST macOS run found: module-level unsafe_code allow missing on mac/mod.rs; mac/dir.rs bypassing the parent seam; and — via the upgraded harness — TWO REAL UBs: cf_key()/get_str() passed bare &str pointers to CFStringCreateWithCString (OOB read working only by rodata luck) → d734fcf
+  - R3: the record suite's FIRST real-Windows run: FileId at 72 not 68 (LARGE_INTEGER padding after EaSize; my hardcoded asserts wrong, the offset_of! builder right), and the header check let returned<HEADER fall through to a misleading message → tightened to offset+HEADER>returned → 3677f3c
+- XCHECK HARNESS UPGRADED: now runs cargo CLIPPY per target (check alone had hidden all lint failures) + rust-version=1.80 pinned (kills MSRV-gated false positives). Local loop now matches CI exactly.
+- NEW CI GATES: Test Matrix per-OS jobs run app-crate clippy -D warnings (the ubuntu static-gates job never compiles platform code — the app's per-OS modules had NEVER been lint-gated before today)
+
+Stage Summary:
+- main @ 3677f3c — CI validating. Test inventory: 196 core + ~4,700 property + 21 platform + 16 mac app + 13 win app
+- Real bugs fixed this session so far: 2 CFString UBs, build_record NUL, ABI offsets, header-check semantics, mac error ladder (EINTR/EACCES/ENOTSUP), + everything from tasks 26-28
+- Next: CI green verification, then benchmarks wave + final wrap
+
+---
+Task ID: 30
+Agent: main (Super Z)
+Task: SESSION 9 (cont. 3) — the pedantic-parity convergence; ALL 13 CI CHECKS GREEN
+
+Work Log:
+- CI convergence loop closed in 4 rounds (e961cd1 -> d55815f -> 87070ab):
+  - Round A: the app-crate clippy gate's macOS run exposed the mac platform had never faced the crate's pedantic config — full parity pass (module-level FFI posture matching win/mod.rs, map_or/is_some_and/let-else modernizations, #[must_use] + # Errors/# Panics docs, Block1 keep_alive rename, API-parity allows with reasons, .app rsplit check, &HostPlatform -> HostPlatform in commands, mac_pass wildcard -> explicit imports)
+  - Round B: three compile errors the app-only files hid locally (WindowsPlatform not Copy — derive parity; **platform vs *platform deref depths; phantom COMMIT_BATCH_SIZE from a bad dependency extraction)
+  - Round C: ComApartment::init method-level dead-code allow
+  - Round D: GREEN — all 13 checks
+- XCHECK HARNESS FINAL SHAPE: private platform mod + consumer module mirroring the commands' os:: surface + the app's EXACT [lints] (all=deny, pedantic=warn) + rust-version=1.80 + clippy per target. Local loop == CI for the platform seam. The two lints it cannot reproduce (dead_code, unused_imports for recycle_seam/com re-exports) are scoped-allowed with justification.
+
+Stage Summary:
+- main @ 87070ab: ALL GREEN — static gates, NSIS bundle, core+platform suites on windows-latest/macos-latest/macos-14, benchmarks both platforms, UI screenshots, macOS Build
+- Session 9 totals: PR #1 merged (platform split); mac error ladder; quickwins invariants; win record-walk suite + extraction; device-behavior suite; 2 CFString NUL-termination UBs; ABI offsets verified (FileId@72); header-check semantics; app-crate clippy gate on both platforms; full pedantic parity; ~60 new tests (188 core + 12 win records + 4 mac ladder)
+- Every commit pushed immediately; worklog current; LEARNINGS-BACKLOG.md preserves all 80 findings with dispositions
+- REMAINING for next session: benchmarks wave (criterion expansion), roadmap features from LEARNINGS-BACKLOG (memoized rescans, directory-id parenting, tier model), token rotation
+
+---
+Task ID: merge-1
+Agent: main (Super Z)
+Task: Merge refactored Rust core from heictojpgpics/DiskBytes into diskbytes_new (UI/UX intact)
+
+Work Log:
+- Cloned both repos; common ancestor 7a05909; ours = 48 files (UI/UX + 3 UI-supporting Rust features), theirs = 29 files (Rust refactor: platform monoliths → 16 submodules, +60 tests, clippy pedantic parity)
+- git merge refactored/main --no-commit; 5 conflicts resolved:
+  * platform.rs tests → THEIRS (superset: +274 device-behavior tests, independently fixed same trailing-dot + normalization bugs we fixed)
+  * platform/mac.rs + win.rs → THEIRS (deleted; 16 submodules replace; our clippy monolith fixes moot)
+  * recycle.rs → THEIRS (keeps absorbed_by with allow + explicit imports; their tests read it)
+  * cleanup.rs → AUTO-MERGED (their lint attrs + our clear_all_caches dedup)
+  * worklog.md → combined both session logs
+- Preserved UI-critical Rust features (auto-merged, no conflict): ListRow.items (child_count) for ListMode Items column; scan::clear_all_cachees pub; commit path cache dedup
+- Verified no API contract changes in their command layer (pass-by-value internal only)
+- GATES: tsc 0 errors; vitest 54/54; vite build OK; cargo fmt clean; clippy core clean; cargo test core 196 GREEN (159 unit + 21 props + 16 platform)
+- App crate needs GTK (Linux, no sudo) → validated via CI on win/mac runners (same posture as prior session)
+
+Stage Summary:
+- Merge commit ready; UI/UX work fully intact (48 files untouched by merge); Rust core now the refactored production version
+- Next: push → CI monitor → user-reported bug batch (Free Pro text, mode-bar light-mode text, filter-bar sizing, monitor preload, mode-switch blink, streaming apps/dupes, uninstall popup)
