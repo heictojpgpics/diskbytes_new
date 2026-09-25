@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, animate, motion, useMotionValue, useTransform } from "framer-motion";
-import { ExternalLinkIcon, FolderIcon, HardDriveIcon, ScanLineIcon, SquareIcon } from "../components/Icon";
+import { ExternalLinkIcon, FolderIcon, HardDriveIcon, ScanLineIcon, SquareIcon, UacShieldIcon } from "../components/Icon";
 import { EmptyState } from "../components/buttons";
 import { UnreadableNotice } from "../sidebar";
 import { ExploreHeader } from "./ExploreHeader";
@@ -30,7 +30,7 @@ import { CANVAS_MODES } from "../state/vizUi";
 import { getHoverDetails } from "../viz/layoutIpc";
 import { getNodeDetails, type NodeDetailsData } from "../viz/exploreIpc";
 import { EVENTS, track } from "../lib/analytics";
-import { FADE_SWAP, EXIT_FAST } from "../lib/motion";
+import { FADE_SWAP, EXIT_COVERED } from "../lib/motion";
 
 /** Smoothly-rolling "N files · X GB" live counter (motion values, no
  * per-tick React re-render churn — the 150 ms IPC ticks TWEEN into each
@@ -67,9 +67,44 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
   const stage = useCleanupStore((s) => s.stage);
 
   const chip = useRef<HoverChipHandle>(null);
+  const stageEl = useRef<HTMLElement | null>(null);
   const hoverSeq = useRef(0);
   const [menu, setMenu] = useState<ItemMenuState | null>(null);
   const [folderView, setFolderView] = useState<NodeDetailsData | null>(null);
+
+  // Shift+F10: the Windows keyboard context-menu key. Same contract as
+  // right-click, but for the SELECTED item (the keyboard-nav surrogate
+  // for "the item with focus"): the menu opens at the focused element
+  // when one lives in the stage (DOM rows, folder cards), else at the
+  // stage center (canvas modes keep their selection off-DOM). Skipped
+  // while typing — the search box owns its keys.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "F10" || !e.shiftKey) return;
+      const sel = useExploreStore.getState().selectedNode;
+      if (sel == null) return;
+      const ae = document.activeElement;
+      const tag = ae?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || (ae as HTMLElement | null)?.isContentEditable) return;
+      e.preventDefault();
+      const stage = stageEl.current;
+      const inStage = ae instanceof HTMLElement && stage?.contains(ae) ? (ae as HTMLElement) : null;
+      let x: number;
+      let y: number;
+      if (inStage) {
+        const r = inStage.getBoundingClientRect();
+        x = r.left + 4;
+        y = r.bottom + 6;
+      } else {
+        const r = stage?.getBoundingClientRect();
+        x = (r?.left ?? 0) + (r?.width ?? 0) / 2;
+        y = (r?.top ?? 0) + (r?.height ?? 0) / 2;
+      }
+      setMenu({ id: sel, x, y });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Throttled path ticker: the raw currentPath changes every 150 ms
   // (unreadable strobe); display it at ~600 ms with a soft crossfade.
@@ -298,7 +333,7 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
                 }
               }}
             >
-              {elevation ? "Restart as administrator" : "Try again"}
+              {elevation ? <><UacShieldIcon size={14} /> Restart as administrator</> : "Try again"}
             </button>
           </div>
         </div>
@@ -335,20 +370,22 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
         <ExploreHeader />
         <UnreadableNotice />
       </div>
-      <section className="db-visual-stage db-scroll" aria-label={`${mode} visualization`}>
-        {/* Mode-swap CROSSFADE (popLayout): the old view fades out OVER
-         * the entering one, which covers the new canvas's layout-IPC
-         * window (mount → blank → fetch → paint was the reported
-         * "blink"). The exiting wrapper is popped absolute inside the
-         * relative stage, so no layout shift and no blank frame.
-         * `initial={false}` keeps the very first mount static. */}
-        <AnimatePresence mode="popLayout" initial={false}>
+      <section ref={stageEl} className="db-visual-stage db-scroll" aria-label={`${mode} visualization`}>
+        {/* Mode-swap CROSSFADE (cover-style): the new mode fades in
+         * OVER the still-visible old one — the new canvas's layout-IPC
+         * window (mount → blank → fetch → paint, the reported
+         * "blink") happens underneath the old view. The exiting
+         * wrapper is lifted absolute by pure CSS (:not(:last-child)),
+         * so no layout shift, no injected style rules, and a stuck exit
+         * can never reflow the stage. `initial={false}` keeps the very
+         * first mount static. */}
+        <AnimatePresence initial={false}>
           <motion.div
             key={`${generation}:${currentFolder}:${mode}`}
             className="db-stage-swap"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1, pointerEvents: "auto", transition: FADE_SWAP }}
-            exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_FAST }}
+            exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_COVERED }}
           >
           {mode === "Folders" && (
             <FoldersMode

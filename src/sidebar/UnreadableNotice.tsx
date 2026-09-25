@@ -5,7 +5,7 @@
  * Full Disk Access (Mac BuildPrompt §6).
  */
 import { useEffect, useState } from "react";
-import { LockKeyholeIcon, SettingsIcon, ShieldIcon, XIcon } from "../components/Icon";
+import { LockKeyholeIcon, SettingsIcon, UacShieldIcon, XIcon } from "../components/Icon";
 import { invoke } from "../lib/ipc";
 import { IS_MAC } from "../lib/platform";
 import { useScanStore } from "../state/scan";
@@ -69,7 +69,7 @@ export function UnreadableNotice() {
         </button>
       ) : elevated === false ? (
         <button type="button" className="db-outline compact" onClick={restartAdmin}>
-          <ShieldIcon size={14} /> Restart as administrator
+          <UacShieldIcon size={14} /> Restart as administrator
         </button>
       ) : null}
       <button

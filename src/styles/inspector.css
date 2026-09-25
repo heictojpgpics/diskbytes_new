@@ -5,7 +5,11 @@
  * ═══════════════════════════════════════════════════════════════════════ */
 
 .db-inspector {
-  width: 100%;
+  /* FIXED width (not 100%): during the inspector-track open/close the
+   * column animates its width; a percentage would re-wrap the content
+   * every intermediate frame. Fixed width + column overflow:hidden =
+   * the panel reveals/slides crisp, never squishes. */
+  width: var(--inspector-w);
   height: 100%;
   overflow-y: auto;
   padding: 16px 15px 26px;

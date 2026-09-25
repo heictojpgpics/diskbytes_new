@@ -346,11 +346,38 @@ export function buildLayout(
     };
     ring(kids, r0 + ringGap, rMax * 0.5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2, 0);
   } else if (mode === "flame") {
-    const rowH = Math.min(88, (height - 6) / Math.max(3, Math.min(depth, 6)));
+    // Root title row (Rust parity): the CURRENT folder spans row 0 as
+    // the anchor-gray band the renderer styles as a title bar; children
+    // start at row 1. ADAPTIVE row count (Rust parity): rows = what the
+    // data actually draws (bounded by the depth slider) — a shallow
+    // subtree gets fat rows that still fill the height exactly instead
+    // of slider-depth rows trailing into empty space.
+    const levels = Math.max(3, Math.min(depth, 6));
+    const rowsBelow = (items: Item[], d: number): number => {
+      if (d > levels) return 0;
+      const sum = items.reduce((a, b) => a + b.v, 0);
+      if (sum <= 0) return 0;
+      let best = 0;
+      for (const it of items) {
+        if (tree.nodes[it.node].isDir) {
+          best = Math.max(best, rowsBelow(childrenSorted(tree, it.node), d + 1));
+        }
+      }
+      return 1 + best;
+    };
+    const levelsUsed = Math.max(1, rowsBelow(kids, 1));
+    const rowH = (height - 6) / (levelsUsed + 1);
+    cells.push({
+      id: rootId,
+      depth: 0,
+      flags: KIND_RECT,
+      rgba: 0x8e8e93ff,
+      g: [0, 0, width, rowH, 0],
+    });
     const rows: { item: Item; a0: number; a1: number; sib: number; d: number }[] = [];
     const layout = (items: Item[], a0: number, a1: number, d: number): void => {
       const sum = items.reduce((a, b) => a + b.v, 0);
-      if (sum <= 0 || d >= Math.min(depth, 6)) return;
+      if (sum <= 0 || d > levels) return;
       // Two-pass, mirroring the Rust engine: KEPT children (span ≥ 1.5px)
       // are rescaled to fill the parent's span contiguously — skipped
       // sub-pixel children leave no background holes between kept blocks
@@ -370,7 +397,7 @@ export function buildLayout(
         a += span;
       }
     };
-    layout(kids, 0, 1, 0);
+    layout(kids, 0, 1, 1);
     for (const r of rows.slice(0, MAX_CELLS)) {
       const n = tree.nodes[r.item.node];
       const x0 = r.a0 * width;

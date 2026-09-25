@@ -25,13 +25,14 @@ import { useScanStore } from "./state/scan";
 import { useExploreStore } from "./state/explore";
 import { useLicenseStore, attachLicenseEvents } from "./state/license";
 import { bootstrapMonitor } from "./state/monitor";
+import { preloadApplications } from "./state/applications";
 import { getBreadcrumb, type CrumbData } from "./viz/exploreIpc";
 import { invoke } from "./lib/ipc";
 import { pushRecent } from "./sidebar/RecentSection";
 import { TourDriver } from "./shell/TourDriver";
 import { AppErrorBoundary } from "./shell/AppErrorBoundary";
 import { CheckIcon, ShieldIcon, Trash2Icon } from "./components/Icon";
-import { SPRING_TOAST, FADE_SWAP, EXIT_FAST } from "./lib/motion";
+import { SPRING_TOAST, FADE_SWAP, EXIT_COVERED } from "./lib/motion";
 import { listen } from "./lib/ipc";
 import "./theme/tokens.css";
 import "./styles/base.css";
@@ -71,6 +72,10 @@ function AppShell() {
     // cadence is app-lifetime, so the tab renders live data the moment
     // it is opened (no mount-then-wait). See state/monitor.ts.
     bootstrapMonitor();
+    // Applications warm at BOOT too: one background enumeration fills
+    // the Rust app-lifetime cache — the first tab visit is a cache hit
+    // (no skeletons, no per-mount IPC round trip).
+    preloadApplications();
   }, []);
 
   // Toast bus: any surface can raise a transient toast via the
@@ -206,18 +211,19 @@ function AppShell() {
           <Sidebar />
         </div>
         <div className="db-main-col">
-          {/* Tab crossfade (popLayout): the OLD tab stays visible while
-           * the new one mounts — its first IPC round-trip / cache warm
-           * happens underneath, so the old hard-swap "blink" (blank
-           * frame + pop-in) is gone. Exiting view is popped absolute
-           * (db-main-col is position:relative). */}
-          <AnimatePresence mode="popLayout" initial={false}>
+          {/* Tab crossfade (cover-style): the entering view fades in
+           * OVER the still-fully-visible old one; the old one only
+           * fades out AFTER it is covered, then unmounts. The exiting
+           * wrapper is lifted out of flow by pure CSS (absolute,
+           * :not(:last-child)) — no JS measurement, no injected style
+           * rules; a stuck exit can never affect layout. */}
+          <AnimatePresence initial={false}>
             <motion.div
               key={tab}
               className="db-tab-swap"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1, pointerEvents: "auto", transition: FADE_SWAP }}
-              exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_FAST }}
+              exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_COVERED }}
             >
               {tab === "explore" && <ExploreView onPreview={openPreview} />}
               {tab === "duplicates" && <DuplicatesView />}
@@ -227,7 +233,10 @@ function AppShell() {
             </motion.div>
           </AnimatePresence>
         </div>
-        {inspectorVisible && tab === "explore" && (
+        {/* Mounted whenever Explore is active (the track animates 0px ↔
+         * --inspector-w; a conditional mount could only hard-snap) —
+         * visibility is the .has-inspector class on .db-body. */}
+        {tab === "explore" && (
           <div className="db-inspector-col">
             <InspectorPanel onPreview={openPreview} />
           </div>

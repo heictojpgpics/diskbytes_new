@@ -5,7 +5,7 @@
  * alert with Restart-as-administrator.
  */
 import { useEffect, useRef, useState } from "react";
-import { AppWindowIcon, CheckIcon, PackageOpenIcon, RefreshCwIcon, Trash2Icon, ShieldIcon } from "../components/Icon";
+import { AppWindowIcon, CheckIcon, PackageOpenIcon, RefreshCwIcon, Trash2Icon, UacShieldIcon } from "../components/Icon";
 import { TailPath } from "../components/TailPath";
 import { EmptyState, SkeletonRows, Spinner } from "../components/buttons";
 import { useFocusTrap } from "../lib/useFocusTrap";
@@ -20,7 +20,6 @@ export function ApplicationsView() {
   const status = useScanStore((s) => s.status);
   const startScan = useScanStore((s) => s.startScan);
   const apps = useApplicationsStore((s) => s.apps);
-  const partial = useApplicationsStore((s) => s.partial);
   const busy = useApplicationsStore((s) => s.busy);
   const error = useApplicationsStore((s) => s.error);
   const load = useApplicationsStore((s) => s.load);
@@ -72,11 +71,7 @@ export function ApplicationsView() {
     );
   }
 
-  // Streaming: while the measurement pass runs, `partial` carries the
-  // already-measured rows — they render live (the sub-caption counts
-  // them); the authoritative `apps` snapshot replaces them on return.
-  const streaming = apps === null && partial.length > 0;
-  const sorted = [...(apps ?? partial)].sort((a, b) => b.total - a.total);
+  const sorted = [...(apps ?? [])].sort((a, b) => b.total - a.total);
   const totalFootprint = sorted.reduce((a, x) => a + x.total, 0);
   const now = Math.floor(Date.now() / 1000);
 
@@ -113,11 +108,7 @@ export function ApplicationsView() {
           <h1>Applications</h1>
           <span className="db-tab-sub">
             {busy ? (
-              streaming ? (
-                <><b>{partial.length.toLocaleString()}</b> apps measured · streaming…</>
-              ) : (
-                "Measuring bundles & leftovers…"
-              )
+              "Measuring bundles & leftovers…"
             ) : (
               <><b>{sorted.length.toLocaleString()}</b> installed · <b>{bytes(totalFootprint)}</b> total</>
             )}
@@ -150,29 +141,22 @@ export function ApplicationsView() {
             className="db-outline compact danger" style={{ marginTop: 8 }}
             onClick={() => void invoke("restart_as_admin", { scanTarget: "ThisPC", turbo: false }).catch(() => undefined)}
           >
-            <ShieldIcon size={13} /> Restart as administrator
+            <UacShieldIcon size={13} /> Restart as administrator
           </button>
         </div>
       )}
 
-      {busy && !streaming && sorted.length === 0 && (
+      {busy && !apps && (
         // Structure preview (loading system v2): app-row skeletons keep
         // the table's rhythm instead of collapsing to a spinner-in-a-void.
-        // Empty-content only: during a REFRESH (apps already rendered) or
-        // mid-stream (partial rows live), stacking skeletons over real
-        // rows double-paints the tab.
+        // Empty-content only: during a REFRESH (apps already rendered),
+        // stacking skeletons over real rows double-paints the tab.
         <>
           <SkeletonRows rows={7} className="db-tab-skeleton" />
           <div className="db-loading-block" role="status">
             <span>Listing registry + Store apps, measuring sizes…</span>
           </div>
         </>
-      )}
-
-      {streaming && (
-        <div className="db-loading-block" role="status">
-          <span>Measuring bundle sizes — {partial.length} of the biggest apps already live…</span>
-        </div>
       )}
 
       {sorted.map((app) => {

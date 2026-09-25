@@ -71,7 +71,7 @@ export function CurrentViewSection() {
               {progress.files.toLocaleString()} files · {bytes(progress.bytes)}
             </span>
           </div>
-          <div className="db-scan-row" style={{ fontSize: 9.5, color: "var(--text-tertiary)" }}>
+          <div className="db-scan-row db-scan-path" title={progress.currentPath}>
             {progress.currentPath}
           </div>
           <div className="db-scan-bar">

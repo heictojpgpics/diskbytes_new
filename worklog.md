@@ -873,3 +873,31 @@ Work Log:
 Stage Summary:
 - Session totals across the 4 waves: merge + 7 user-reported fixes + 2 review rounds (20 findings, all fixed) + 2 audit rounds (interaction + viz, all P1/P2 fixed) + viz top-10 refinements + overflow batch
 - 6 commits pushed; CI green through 8540877, final runs in flight
+
+---
+Task ID: uiux-5
+Agent: main
+Task: Revert Applications/Duplicates streaming (memory 2.4 GB + continuous scan + broken 70/30 layout), make dupes scan faster, fix flicker/sidebar animation, user-reported bug batch, next-round viz items
+
+Work Log:
+- Verified user's broken-state screenshots (VLM + pixel analysis): all non-explore tabs squished to bottom 30%, top blank; Duplicates stuck "Scanning..." forever
+- Root-caused the 70/30 layout: framer popLayout's PopChild never injects position:absolute when the exit measurement fails → exiting view stays IN FLOW at flex:1; root-caused the continuous scanning: DuplicatesView auto-scan re-fires per mount (N visits = N concurrent full-disk hashes = 2.4 GB)
+- REVERTED streaming: applications.rs (chunked emit → simple rayon pass, AppHandle removed), dupes.rs (bucket emissions removed), state/applications.ts (partial/listen machinery removed), ApplicationsView + DuplicatesView (restored snapshot/manual-scan flows; KEPT uninstall dialog v2, CTAs, skeletons), mock parity
+- Made dupes FASTER: pass-2 prefix hashing and pass-3 full hashing both parallel on rayon (NVMe queue depth); empty files screened pre-hash; result unchanged (196 core tests green)
+- Applications preload at boot (like monitor): one background enumeration, first tab visit is a cache hit
+- Fixed 70/30 by construction: replaced popLayout crossfades (tab + stage) with CSS :not(:last-child) absolute lift + EXIT_COVERED (cover-style: new fades in OVER old, old unmounts covered) — a stuck exit can never affect layout; verified: live view always relative+full-size, exits always absolute
+- Fixed the flicker: canvas GPU rescale transform (shell size tracks every RO event; fetch size debounced) — the treemap follows sidebar/inspector transitions frame-perfect; pointer hits map back through the scale
+- Fixed inspector hard-snap: grid now always 3 tracks (0px ↔ 344px interpolates; 2↔3-value lists could not) — frame analysis: 1×40-delta snap → 6-frame eased animation; inspector panel fixed-width (never squishes)
+- Folders mode "Folders (N)" heading aligned with the 20px scroll inset (was flush to stage edge)
+- Scan strip currentPath: one line + ellipsis + hover title (was overflowing the rounded strip)
+- UacShieldIcon: Windows 11 four-quadrant shield (blue/green/yellow/red, Fluent flat) — all three restart-as-admin buttons; VLM-verified
+- Flame: root title band (Rust + mock parity, children offset to row 1 — root used to be overpainted at y=0), ADAPTIVE row count (reachable-depth DFS) so shallow trees fill the height; 3 VLM-verified
+- Sunburst hover-wedge fill (theme-aware translucent fill + rings, ringPathTrace refactor)
+- Shift+F10 context menu on the selected item (Windows keyboard convention)
+- Validation: tsc ✓, 54 tests ✓, build ✓, 196 core tests ✓, clippy ✓, fmt ✓; browser: zero console errors, zero blank frames in mode/tab-switch video analysis, no DOM leak under rapid tab stress
+
+Stage Summary:
+- Streaming fully reverted; dupes scan parallel + prefix-screened; applications boot-preloaded
+- The 70/30 layout break, continuous scanning, and memory balloon are structurally eliminated (no streaming events, no auto-scan, CSS-lifted exits)
+- Transitions are cover-style crossfades; canvas follows resizes via GPU transform; inspector animates smoothly
+- All user-reported bugs fixed; 3 next-round items implemented and verified

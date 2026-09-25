@@ -33,3 +33,11 @@ export const FADE_SWAP: Transition = { duration: 0.15, ease: "easeOut" };
 
 /** Overlay exit: quick, no spring (springs on exit feel sticky). */
 export const EXIT_FAST: Transition = { duration: 0.14, ease: "easeIn" };
+
+/** COVERED exit for content swaps (tab/stage): the entering view fades
+ * IN over this one first (FADE_SWAP, 150 ms); only after it is covered
+ * does this one fade out beneath it (delay 120 ms + 140 ms). The old
+ * content never shows through the new one, there is no blank frame at
+ * any point in the swap, and the unmount lands at ~260 ms. Used with
+ * the CSS :not(:last-child) absolute lift in shell.css/explore.css. */
+export const EXIT_COVERED: Transition = { duration: 0.14, ease: "easeIn", delay: 0.12 };

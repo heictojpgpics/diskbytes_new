@@ -531,6 +531,19 @@
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
+/* The live path row: unbroken Windows paths (C:\Users\…) used to run
+ * straight out of the rounded strip (flex rows never shrink unbreakable
+ * text). One line, ellipsis, full title on hover — the strip keeps its
+ * shape at every path length. */
+.db-scan-strip .db-scan-row.db-scan-path {
+  display: block;
+  font-size: 9.5px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 .db-scan-strip .db-scan-bar {
   height: 4px;
   border-radius: 3px;

@@ -251,13 +251,27 @@
   position: relative;
   background: var(--background);
 }
-/* The keyed swap wrapper (ExploreView): a real flex box so every mode's
- * root still stretches the full stage; only opacity/transform animate. */
+/* The keyed swap wrapper (ExploreView, cover-style crossfade): the
+ * ENTERING mode (last DOM child) flows normally; any EXITING mode is
+ * lifted out of the scroll flow by CSS alone (:not(:last-child) →
+ * absolute, inset 0). No JS measurement, no popLayout injection — a
+ * slow or stuck exit can never reflow the stage. The entering wrapper
+ * is positioned too, so it paints above the lifted exiting one (DOM
+ * order wins among positioned siblings). */
 .db-stage-swap {
   height: 100%;
   min-height: 100%;
   display: flex;
   flex-direction: column;
+}
+.db-stage-swap:last-child {
+  position: relative;
+}
+.db-stage-swap:not(:last-child) {
+  position: absolute;
+  inset: 0;
+  /* Dead the instant the child stops being last (see .db-tab-swap). */
+  pointer-events: none;
 }
 
 /* Folder-card entrance: a capped stagger (first ~12 cards) with
@@ -523,6 +537,14 @@
   align-items: center;
   gap: 10px;
   margin: 22px 0 12px;
+}
+/* Folders-mode symmetry: the top "Folders (N)" heading lives on the
+ * unpadded view while the cards grid + "Files (N)" heading sit inside
+ * the 20px-padded scroll area — the two headings used to land 20px
+ * apart (the reported asymmetry). Align the top heading with the
+ * scroll content's inset. */
+.db-folders-view > .db-view-heading {
+  padding: 0 20px;
 }
 .db-view-heading h2 {
   /* Section headers read as labels, not competing titles (design

@@ -792,19 +792,12 @@ const commands: Record<string, Cmd> = {
   },
 
   // ── duplicates ────────────────────────────────────────────────────
-  // STREAMING parity: groups emit as `dupes-group` events while the
-  // "hashing" window runs (mirroring the engine's best-value-first
-  // bucket emission); the command resolves with the authoritative
-  // result afterwards — the UI exercises the exact live path it runs
-  // in production Tauri.
+  // One invoke, one result — matches the reverted engine contract (the
+  // parallel 3-pass pipeline is fast; the streaming experiment raced
+  // itself). The ~900 ms window below keeps the busy state honest so
+  // the loading row is exercisable.
   find_duplicates: () =>
     new Promise((resolve) => {
-      DUPES.forEach((g, i) => {
-        window.setTimeout(
-          () => emitMockEvent("dupes-group", { ...g, id: 10_000 + i }),
-          170 + i * 260 + Math.random() * 110,
-        );
-      });
       window.setTimeout(
         () =>
           resolve({
@@ -813,26 +806,17 @@ const commands: Record<string, Cmd> = {
             wastedTotal: DUPES.reduce((s, g) => s + g.wasted, 0),
             files: 3821,
           }),
-        170 + DUPES.length * 260 + 150,
+        850 + Math.random() * 250,
       );
     }),
 
   // ── applications ──────────────────────────────────────────────────
-  // STREAMING parity: 16-row chunks emit as `applications-batch`
-  // events across a ~1.5 s measurement window (the engine streams per
-  // completed chunk from its rayon pass); the command resolves with
-  // the authoritative list afterwards.
+  // One invoke, one list — the Rust side caches the enumeration for the
+  // app lifetime (boot-time preload warms it), so per-call latency only
+  // matters on the very first load.
   list_applications: () =>
     new Promise((resolve) => {
-      const chunks: unknown[][] = [];
-      for (let i = 0; i < APPS.length; i += 16) chunks.push(APPS.slice(i, i + 16));
-      chunks.forEach((chunk, ci) => {
-        window.setTimeout(
-          () => emitMockEvent("applications-batch", chunk),
-          140 + ci * 200 + Math.random() * 90,
-        );
-      });
-      window.setTimeout(() => resolve(APPS), 140 + chunks.length * 200 + 130);
+      window.setTimeout(() => resolve(APPS), 550 + Math.random() * 200);
     }),
   uninstall_app: (a) => {
     console.info("[mock] uninstall_app", a);

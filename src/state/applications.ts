@@ -1,14 +1,15 @@
 /**
  * Applications store (spec §11): keeps the installed-app list across
- * tab switches, tracks load state and errors. STREAMING: while the
- * Rust measurement pass runs, each completed 16-app chunk arrives as
- * an `applications-batch` event and lands in `partial` — the tab
- * renders those rows live (sorted by total) instead of a full
- * skeleton wait; `apps` is the authoritative snapshot from the
- * command's return (cache semantics unchanged).
+ * tab switches ("Load everything in a background task and keep the
+ * result across tab switches"), tracks load state and errors.
+ *
+ * The list is fetched ONCE (the Rust side caches the enumeration for
+ * the app lifetime; `refresh` re-enumerates). A `preload()` call at app
+ * boot warms the cache so the first Applications-tab visit renders
+ * instantly — no per-mount load flash, no streaming machinery.
  */
 import { create } from "zustand";
-import { invoke, listen, type UnlistenFn } from "../lib/ipc";
+import { invoke } from "../lib/ipc";
 
 export interface LeftoverPath {
   path: string;
@@ -47,8 +48,6 @@ export interface UninstallResult {
 
 interface ApplicationsState {
   apps: AppEntry[] | null;
-  /** Progressive rows streamed while the measurement pass runs. */
-  partial: AppEntry[];
   busy: boolean;
   error: string | null;
   load: (refresh?: boolean) => Promise<void>;
@@ -56,77 +55,28 @@ interface ApplicationsState {
   reset: () => void;
 }
 
-let streamUnlisten: UnlistenFn | null = null;
-let streamRefs = 0;
-let streamPending: Promise<UnlistenFn> | null = null;
-
-/** Subscribe (idempotent, ref-counted) to the measurement stream. The
- * in-flight listen() is memoized — two overlapping load() calls both
- * seeing `streamUnlisten === null` would register TWO Tauri listeners
- * and orphan the first unlisten handle (StrictMode's double mount
- * effect hits this exact window in dev). */
-async function ensureStreamListener(
-  onBatch: (batch: AppEntry[]) => void,
-): Promise<() => void> {
-  streamRefs += 1;
-  if (streamPending === null && streamUnlisten === null) {
-    streamPending = listen<AppEntry[]>("applications-batch", (batch) => {
-      onBatch(batch);
-    });
-    streamPending.catch(() => {
-      // Listen failed: drop the memo so a later load can retry. EVERY
-      // outstanding ref belongs to a caller whose await also rejects
-      // with no detach created — zero the count (the catch microtask
-      // runs before any new caller can enter).
-      streamPending = null;
-      streamRefs = 0;
-    });
-  }
-  const un = await (streamPending ?? Promise.resolve(streamUnlisten!));
-  streamUnlisten = un;
-  streamPending = null;
-  return () => {
-    streamRefs -= 1;
-    if (streamRefs <= 0 && streamUnlisten) {
-      streamUnlisten();
-      streamUnlisten = null;
-      streamRefs = 0;
-    }
-  };
-}
-
-export const useApplicationsStore = create<ApplicationsState>((set, get) => ({
+export const useApplicationsStore = create<ApplicationsState>((set) => ({
   apps: null,
-  partial: [],
   busy: false,
   error: null,
   load: async (refresh = false) => {
-    // Always clear partial (not just on refresh): a failed prior load
-    // leaves stale rows that would otherwise merge into the next pass.
-    set({ busy: true, error: null, partial: [] });
-    let detach: (() => void) | null = null;
+    set({ busy: true, error: null });
     try {
-      // Merge streamed rows by id (chunks may arrive from either
-      // enumerate path; double-emission under concurrent loads is
-      // harmless — the map upserts).
-      detach = await ensureStreamListener((batch) => {
-        if (get().apps !== null) return; // authoritative list already landed
-        const byId = new Map(get().partial.map((a) => [a.id, a]));
-        for (const a of batch) byId.set(a.id, a);
-        set({ partial: [...byId.values()] });
-      });
       const apps = await invoke<AppEntry[]>("list_applications", { refresh });
-      set({ apps, partial: [], busy: false });
+      set({ apps, busy: false });
     } catch (e) {
-      // partial clears here too: a failed load leaves streamed rows
-      // that would otherwise render as the authoritative caption with
-      // nothing running behind it.
-      set({ apps: null, partial: [], busy: false, error: String(e) });
-    } finally {
-      detach?.();
+      set({ apps: null, busy: false, error: String(e) });
     }
   },
   uninstall: async (id) =>
     invoke<UninstallResult>("uninstall_app", { id }),
-  reset: () => set({ apps: null, partial: [], busy: false, error: null }),
+  reset: () => set({ apps: null, busy: false, error: null }),
 }));
+
+/** Warm the app-lifetime cache at boot (see App.tsx): the enumeration
+ * runs once in the background — the first tab visit is a cache hit. */
+export function preloadApplications() {
+  if (useApplicationsStore.getState().apps === null && !useApplicationsStore.getState().busy) {
+    void useApplicationsStore.getState().load();
+  }
+}

@@ -37,11 +37,17 @@ pub fn flame(
     check_geometry(width, height)?;
     let n = tree.node(node).ok_or(CoreError::NodeNotFound(node))?;
     let total = n.on_disk;
-    let row_h = if depth > 0 {
-        height / depth as f32
-    } else {
-        height
-    };
+    // +1 level: the root title row. The chart reserves row 0 for the
+    // current folder's full-width band (the renderer styles it as a
+    // title bar — name + total); children start at row 1.
+    // ADAPTIVE row count: rows = reachable depth + 1, bounded by the
+    // depth setting — a shallow subtree gets fat rows that still fill
+    // the height exactly, instead of depth-setting rows trailing into
+    // empty space (the VLM audit's "3-4 empty rows" finding). Row
+    // height capped at 120 so an empty folder's title band doesn't
+    // stretch to full height.
+    let levels = reachable_levels(tree, node, depth).max(1);
+    let row_h = (height / (levels + 1) as f32).min(120.0);
     let mut cells: Vec<Cell> = Vec::with_capacity(512);
     let mut truncated = false;
     // By-folder families attach at the effective branch root: descend
@@ -94,6 +100,32 @@ pub fn flame(
     })
 }
 
+/// Rows the chart will actually draw below the root, bounded by
+/// `limit`: one row per sizeable-child level (dirs AND files — file
+/// blocks occupy a row too), recursing only through dirs. Mirrors the
+/// emission's descent so the adaptive row count matches the drawn rows.
+fn reachable_levels(tree: &Tree, node: u32, limit: u32) -> u32 {
+    if limit == 0 {
+        return 0;
+    }
+    let children = tree.children_sorted(node);
+    let any_sizeable = children
+        .iter()
+        .any(|&id| tree.node(id).is_some_and(|c| c.on_disk > 0));
+    if !any_sizeable {
+        return 0;
+    }
+    let mut best: u32 = 0;
+    for &id in children {
+        if let Some(c) = tree.node(id) {
+            if c.is_dir() && c.on_disk > 0 {
+                best = best.max(reachable_levels(tree, id, limit - 1));
+            }
+        }
+    }
+    1 + best
+}
+
 /// Recursive row layout: children of `node` inside x-span `(x0..x1)` on
 /// row `depth_here`, each beneath its parent's span. `top_index` is the
 /// inherited by-folder family; `branch_root`'s children re-assign it.
@@ -124,7 +156,7 @@ fn layout_row(
     if total == 0 {
         return;
     }
-    let y = (depth_here - 1) as f32 * row_h;
+    let y = depth_here as f32 * row_h;
     let span = x1 - x0;
     // Pre-pass: kept children (share of `total`, ≥ MIN_W) with widths.
     // Gaps are only inserted between adjacent WIDE blocks (≥ GAP_MIN_W):
@@ -258,14 +290,23 @@ mod tests {
         let wa = row1.iter().find(|c| c.id == 1).unwrap().g[2];
         let wf1 = row1.iter().find(|c| c.id == 2).unwrap().g[2];
         assert!((wa / wf1 - 0.9).abs() < 0.01);
-        // Children of `a` sit within a's x-span on row 2.
+        // Children of `a` sit within a's x-span on row 2. Row geometry
+        // (root title row + adaptive rows): the tree draws 3 rows
+        // (root, root's children, a's children) → row_h = 300/3 = 100;
+        // row 1 y = 100, row 2 y = 200 — the root band owns row 0.
         let a_x = row1.iter().find(|c| c.id == 1).unwrap().g[0];
         let a_w = row1.iter().find(|c| c.id == 1).unwrap().g[2];
+        assert!((row1[0].g[1] - 100.0).abs() < 0.5); // row 1 y
         let row2: Vec<&Cell> = buf.cells.iter().filter(|c| c.depth == 2).collect();
         for c in row2 {
             assert!(c.g[0] >= a_x - 0.5 && c.g[0] + c.g[2] <= a_x + a_w + 0.5);
-            assert!((c.g[1] - 100.0).abs() < 0.5); // row 2 y
+            assert!((c.g[1] - 200.0).abs() < 0.5); // row 2 y
         }
+        // The root title band spans row 0 at full width.
+        let root = buf.cells.iter().find(|c| c.depth == 0).unwrap();
+        assert!((root.g[1] - 0.0).abs() < f32::EPSILON);
+        assert!((root.g[3] - 100.0).abs() < 0.5);
+        assert!((root.g[0] + root.g[2] - 1000.0).abs() < 0.5);
         // No sub-1px blocks.
         assert!(buf.cells.iter().all(|c| c.g[2] >= MIN_W - f32::EPSILON));
     }

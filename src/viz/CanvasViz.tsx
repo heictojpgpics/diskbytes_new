@@ -96,16 +96,22 @@ export function CanvasViz(props: CanvasVizProps) {
   const repaintRef = useRef<(() => void) | null>(null);
   const paintTokenRef = useRef<{ cancelled: boolean }>({ cancelled: false });
 
-  // ResizeObserver (debounced per settle — doc 05 §6). The FIRST
-  // observation applies immediately: the debounce exists for resize
-  // CHURN, and gating the mount measurement behind it added ~120 ms of
-  // blank canvas to every mode switch (CI tour frames 03/05 caught it).
+  // ResizeObserver: SHELL size tracks IMMEDIATELY (every event — the
+  // GPU transform below follows the sidebar/inspector transitions
+  // frame-perfect); FETCH size trails by a 120 ms settle debounce (IPC
+  // churn guard). The first observation applies to both. Gating the
+  // mount measurement behind the debounce added ~120 ms of blank
+  // canvas to every mode switch (CI tour frames 03/05 caught it).
+  const [fetchSize, setFetchSize] = useState({ w: 0, h: 0 });
   useEffect(() => {
     const el = shellRef.current;
     if (!el) return;
     let t: number | null = null;
     let first = true;
-    const apply = (w: number, h: number) => setSize({ w: Math.floor(w), h: Math.floor(h) });
+    const apply = (w: number, h: number) => {
+      setSize({ w: Math.floor(w), h: Math.floor(h) });
+      setFetchSize({ w: Math.floor(w), h: Math.floor(h) });
+    };
     const ro = new ResizeObserver((entries) => {
       const e = entries[0];
       if (!e) return;
@@ -114,8 +120,13 @@ export function CanvasViz(props: CanvasVizProps) {
         apply(e.contentRect.width, e.contentRect.height);
         return;
       }
+      // Immediate shell tracking (transform/hit geometry stay live):
+      setSize({ w: Math.floor(e.contentRect.width), h: Math.floor(e.contentRect.height) });
       if (t !== null) window.clearTimeout(t);
-      t = window.setTimeout(() => apply(e.contentRect.width, e.contentRect.height), 120);
+      t = window.setTimeout(
+        () => setFetchSize({ w: Math.floor(e.contentRect.width), h: Math.floor(e.contentRect.height) }),
+        120,
+      );
     });
     ro.observe(el);
     return () => {
@@ -170,11 +181,12 @@ export function CanvasViz(props: CanvasVizProps) {
     if (canvasMounted) repaintRef.current?.();
   }, [canvasMounted]);
 
-  // Layout fetch
-  const reqKey = `${generation}:${node}:${mode}:${size.w}x${size.h}:${depth}:${colorMode}`;
+  // Layout fetch (keyed on the DEBOUNCED size — one IPC per resize
+  // settle, not one per intermediate frame).
+  const reqKey = `${generation}:${node}:${mode}:${fetchSize.w}x${fetchSize.h}:${depth}:${colorMode}`;
   const [errorText, setErrorText] = useState<string | null>(null);
   useEffect(() => {
-    if (size.w < 40 || size.h < 40) return;
+    if (fetchSize.w < 40 || fetchSize.h < 40) return;
     let disposed = false;
     loadError.current = null;
     setErrorText(null);
@@ -185,8 +197,8 @@ export function CanvasViz(props: CanvasVizProps) {
           generation,
           node,
           mode,
-          width: size.w,
-          height: size.h,
+          width: fetchSize.w,
+          height: fetchSize.h,
           depth,
           color: colorMode,
         });
@@ -220,13 +232,27 @@ export function CanvasViz(props: CanvasVizProps) {
       disposed = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reqKey, size.w, size.h]);
+  }, [reqKey, fetchSize.w, fetchSize.h]);
 
   const cellsById = useMemo(() => {
     const m = new Map<number, Cell>();
     if (layout) for (const c of layout.cells) m.set(c.id, c);
     return m;
   }, [layout]);
+
+  // ── Rescale transform (the buttery resize) ───────────────────────
+  // The shell resizes continuously (sidebar/inspector CSS transitions,
+  // window edges); the layout data arrives for the DEBOUNCED size. In
+  // between, the canvases GPU-scale to follow the shell — no frozen
+  // bitmap tearing away from its container, no blank, no flicker — and
+  // the fresh layout lands at scale 1. Pointer hits map back through
+  // the same factors. `willChange: transform` keeps it compositor-only.
+  const kx = layout && layout.meta.width > 0 ? size.w / layout.meta.width : 1;
+  const ky = layout && layout.meta.height > 0 ? size.h / layout.meta.height : 1;
+  const rescale =
+    Math.abs(kx - 1) > 0.003 || Math.abs(ky - 1) > 0.003
+      ? { transform: `scale(${kx}, ${ky})`, transformOrigin: "0 0", willChange: "transform" }
+      : undefined;
 
   // ── Static paint (once per layout) ─────────────────────────────────
   // NOT keyed on selectedId: drawCells never reads it — the selection
@@ -249,25 +275,31 @@ export function CanvasViz(props: CanvasVizProps) {
   // `ringAlpha` powers the 120 ms fade-in: rings used to appear as hard
   // instant cuts — the only surface in the app without a transition.
   // rAF-driven (the overlay is already ref-driven; no React state).
+  // The overlay canvas lives in LAYOUT coordinates exactly like the
+  // static one (bitmap + CSS at layout dims; the rescale transform in
+  // the JSX follows the shell) — rings stay glued to their cells at
+  // every shell size, including mid-transition.
   const paintOverlay = useCallback(
     (ringAlpha = 1) => {
       const o = overlayRef.current;
       if (!o || !layout) return;
       const dpr = window.devicePixelRatio || 1;
-      const bw = Math.round(size.w * dpr);
-      const bh = Math.round(size.h * dpr);
+      const w = layout.meta.width;
+      const h = layout.meta.height;
+      const bw = Math.round(w * dpr);
+      const bh = Math.round(h * dpr);
       // Resize on width OR height change — a height-only change (sidebar
       // wrap, banner) used to leave a stale backing-store height.
       if (o.width !== bw || o.height !== bh) {
         o.width = bw;
         o.height = bh;
       }
-      o.style.width = `${size.w}px`;
-      o.style.height = `${size.h}px`;
+      o.style.width = `${w}px`;
+      o.style.height = `${h}px`;
       const ctx = o.getContext("2d");
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, size.w, size.h);
+      ctx.clearRect(0, 0, w, h);
       // selection ring (user action): coral outer stroke + a refined thin
       // white inner stroke (reference's selected-cell double-ring).
       const sel = props.selectedId != null ? cellsById.get(props.selectedId) : undefined;
@@ -284,8 +316,21 @@ export function CanvasViz(props: CanvasVizProps) {
       // outer + ink inner reads on BOTH themes (the old single
       // near-black ring vanished against the dark canvas background
       // and was confusable with cell hairlines at 1× zoom).
+      // Sunburst arcs additionally get a soft WEDGE FILL — a 1.5px ring
+      // alone barely registers on a thin arc; the translucent fill
+      // makes the whole wedge light up (hover = "this slice", not
+      // "this edge").
       const hv = hoverCell.current;
       if (hv && hv !== sel) {
+        if (mode === "sunburst" && (hv.flags & 0b111) === CELL_KIND.ARC) {
+          const darkOverlay =
+            document.documentElement.getAttribute("data-theme") === "dark";
+          ringPathTrace(ctx, hv, layout);
+          ctx.fillStyle = darkOverlay
+            ? `rgba(255,255,255,${0.13 * ringAlpha})`
+            : `rgba(29,29,31,${0.09 * ringAlpha})`;
+          ctx.fill();
+        }
         ctx.strokeStyle = `rgba(255,255,255,${0.9 * ringAlpha})`;
         ctx.lineWidth = 2;
         ringPath(ctx, hv, layout, mode);
@@ -294,7 +339,7 @@ export function CanvasViz(props: CanvasVizProps) {
         ringPath(ctx, hv, layout, mode, 1.5);
       }
     },
-    [layout, size, props.selectedId, cellsById, mode],
+    [layout, props.selectedId, cellsById, mode],
   );
 
   // Ring fade-in (120 ms, ease-out). Skipped under reduced motion.
@@ -322,10 +367,16 @@ export function CanvasViz(props: CanvasVizProps) {
   }, [fadeRingsIn]);
 
   // ── Pointer events (refs only — no React state on move) ────────────
+  // Pointer coordinates arrive in SHELL space; cells live in LAYOUT
+  // space. The rescale transform maps layout→shell, so the inverse
+  // (÷ kx, ÷ ky) maps the hit back — hover/selection stay accurate at
+  // every transient scale, not just at scale 1.
   useEffect(() => {
     const s = staticRef.current;
     if (!s || !layout) return;
-    const hit = (x: number, y: number): Cell | null => hitCell(layout.cells, mode, x, y, layout.meta.center);
+    const ikx = kx || 1;
+    const iky = ky || 1;
+    const hit = (x: number, y: number): Cell | null => hitCell(layout.cells, mode, x / ikx, y / iky, layout.meta.center);
     const onMove = (e: PointerEvent) => {
       const r = s.getBoundingClientRect();
       const cell = hit(e.clientX - r.left, e.clientY - r.top);
@@ -381,7 +432,7 @@ export function CanvasViz(props: CanvasVizProps) {
       s.removeEventListener("contextmenu", onCtx);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layout, mode, fadeRingsIn, paintOverlay]);
+  }, [layout, mode, fadeRingsIn, paintOverlay, kx, ky]);
 
   // ── Keyboard access (canvas parity with the DOM modes) ─────────────
   // The 5 canvas modes had NO keyboard path — selection/open was
@@ -413,8 +464,10 @@ export function CanvasViz(props: CanvasVizProps) {
   return (
     <div className="db-viz-wrap">
       <div ref={shellRef} className="db-viz-canvas-shell">
-        {size.w >= 40 && size.h >= 40 && <canvas ref={staticRef} />}
-        {size.w >= 40 && size.h >= 40 && <canvas ref={overlayRef} className="db-overlay-canvas" />}
+        {size.w >= 40 && size.h >= 40 && <canvas ref={staticRef} style={rescale} />}
+        {size.w >= 40 && size.h >= 40 && (
+          <canvas ref={overlayRef} className="db-overlay-canvas" style={rescale} />
+        )}
         {errorText && (
           <div className="db-viz-error" role="alert">
             <strong>Couldn’t load this view.</strong>
@@ -727,8 +780,20 @@ function drawCells(
       }
     } else if (kind === CELL_KIND.RECT) {
       const [x, y, rw, rh] = c.g;
+      // FLAME ROOT-ROW TITLE: the depth-0 band (the current folder,
+      // full-width at the top) renders as a title bar in the treemap
+      // HEADER language — shaded a step deeper than the body, hairline
+      // bottom edge, bold name + right-aligned total. Before this the
+      // root row was an anonymous gray strip; the chart had no anchor.
+      const isFlameRoot = mode === "flame" && c.depth === 0;
       ctx.fillStyle = fill;
       ctx.fillRect(x, y, rw, rh);
+      if (isFlameRoot) {
+        ctx.fillStyle = darkCells ? "rgba(255,255,255,0.10)" : "rgba(29,29,31,0.14)";
+        ctx.fillRect(x, y, rw, rh);
+        ctx.fillStyle = "rgba(29,29,31,0.18)";
+        ctx.fillRect(x, y + rh - 1, rw, 1);
+      }
       // Treemap: white gap separators between the pastel blocks (the
       // reference's look); flame gets a hairline dark stroke — but ONLY
       // on blocks wide enough to carry it: a 1px strokeRect on a 1-3px
@@ -736,7 +801,7 @@ function drawCells(
       // striped "picket fence" the pixel audit measured as 68 one-px
       // background runs in a single row). Narrow blocks render flush
       // and unstroked — the fine texture reads solid.
-      if (mode === "treemap") {
+      if (mode === "treemap" || isFlameRoot) {
         ctx.strokeStyle = "rgba(255,255,255,0.55)";
         ctx.lineWidth = 1.5;
         ctx.strokeRect(x + 0.5, y + 0.5, rw - 1, rh - 1);
@@ -745,7 +810,34 @@ function drawCells(
         ctx.lineWidth = 1;
         ctx.strokeRect(x + 0.5, y + 0.5, rw - 1, rh - 1);
       }
-      if (rw >= 44 && rh >= 16) {
+      if (isFlameRoot && rw >= 42) {
+        // Title-bar label: bold name left, total right — ON the shaded
+        // band (ON_PASTEL reads on the anchor gray + shade overlay).
+        const name = names.get(c.id);
+        if (name) {
+          const label = props.abbreviateLabels ? abbreviate(name) : name;
+          const midY = y + rh / 2 + 0.5;
+          ctx.textBaseline = "middle";
+          ctx.textAlign = "left";
+          ctx.font = `700 11.5px ${fontUi}`;
+          const nameText = clipLabel(ctx, label, rw - 14);
+          if (nameText) haloText(ctx, nameText, x + 7, midY, ON_PASTEL);
+          if (c.size > 0 && rw >= 190) {
+            ctx.font = `600 10px ${fontUi}`;
+            const sizeStr = clipLabel(ctx, bytes(c.size), 84);
+            if (sizeStr) {
+              const nw = nameText ? ctx.measureText(nameText).width : 0;
+              const sw = ctx.measureText(sizeStr).width;
+              if (x + 7 + nw + 12 + sw <= x + rw - 7) {
+                ctx.textAlign = "right";
+                ctx.fillStyle = ON_PASTEL_2;
+                ctx.fillText(sizeStr, x + rw - 7, midY);
+                ctx.textAlign = "left";
+              }
+            }
+          }
+        }
+      } else if (rw >= 44 && rh >= 16) {
         const name = names.get(c.id);
         if (name) {
           const label = props.abbreviateLabels ? abbreviate(name) : name;
@@ -1231,6 +1323,18 @@ function ringPath(
   _mode: string,
   inset = 0,
 ): void {
+  ringPathTrace(ctx, c, layout, inset);
+  ctx.stroke();
+}
+
+/** Trace a cell's ring/wedge geometry WITHOUT stroking — callers can
+ * fill it (sunburst hover-wedge) or stroke with their own style. */
+function ringPathTrace(
+  ctx: CanvasRenderingContext2D,
+  c: Cell,
+  layout: LayoutResult,
+  inset = 0,
+): void {
   const kind = c.flags & 0b111;
   ctx.beginPath();
   if (kind === CELL_KIND.RECT || kind === CELL_KIND.HEADER) {
@@ -1251,5 +1355,4 @@ function ringPath(
       ctx.closePath();
     }
   }
-  ctx.stroke();
 }

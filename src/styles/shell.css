@@ -363,11 +363,16 @@
 }
 
 /* ── Body columns (spec §3: 340 / main / 382 on Explore) ───────────── */
+/* Always THREE tracks: the inspector track animates 0px ↔ --inspector-w
+ * (px ↔ px interpolates; the old 2↔3-value list could NOT transition,
+ * so every inspector open/close hard-snapped the whole layout — the
+ * "flickery" feel). The main column's minmax(0,1fr) absorbs the change
+ * continuously, and the canvas rescale transform follows frame-perfect. */
 .db-body {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) 0px;
   transition: grid-template-columns var(--spring) ease;
 }
 .db-body.has-inspector {
@@ -388,27 +393,48 @@
   display: flex;
   flex-direction: column;
   background: var(--background);
-  /* Positioning context for the tab-swap popLayout crossfade: the
-   * EXITING tab is popped position:absolute and must overlay the
-   * entering one inside THIS column, not the page. */
+  /* Positioning context for the tab crossfade: the EXITING tab is
+   * lifted position:absolute (pure CSS, :not(:last-child) below) and
+   * must overlay the entering one inside THIS column, not the page. */
   position: relative;
 }
-/* Tab-swap wrapper (App.tsx AnimatePresence popLayout): fills the
- * column so each view's own flex/scroll layout is unchanged. */
+/* Tab-swap wrapper (App.tsx AnimatePresence cover-style crossfade).
+ * The ENTERING view (last DOM child) flows normally and fills the
+ * column; any EXITING view is lifted out of flow by CSS alone — no JS
+ * measurement, no injected style rules. A stuck or slow exit can never
+ * push the live view down (the old popLayout approach had exactly that
+ * failure mode). The entering wrapper is also positioned so it paints
+ * above the absolute exiting one (DOM order wins among positioned
+ * siblings). */
 .db-tab-swap {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
+.db-tab-swap:last-child {
+  position: relative;
+}
+.db-tab-swap:not(:last-child) {
+  position: absolute;
+  inset: 0;
+  /* Dead the instant the child stops being last (same commit) — the
+   * framer exit transition's pointerEvents lands only when its DELAYED
+   * timeline starts, leaving a ~120 ms window where clicks on the
+   * half-faded entering view fall through to the old one's buttons. */
+  pointer-events: none;
+}
 .db-body > .db-inspector-col {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   display: flex;
-  border-left: 1px solid var(--divider);
+  border-left: 1px solid transparent;
   background: var(--panel);
   animation: db-inspector-in var(--spring) ease both;
+}
+.db-body.has-inspector > .db-inspector-col {
+  border-left: 1px solid var(--divider);
 }
 @keyframes db-inspector-in {
   from {
