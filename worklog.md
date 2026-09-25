@@ -666,3 +666,21 @@ Work Log:
 Stage Summary:
 - Test Matrix: SUCCESS on f9d1ba1 (Win + macOS x64/arm64)
 - CI / macOS Build / UI Screenshots: completing
+
+---
+Task ID: uiux-final
+Agent: main
+Task: Session completion
+
+Work Log:
+- Final commit 6df1e0a: ALL FOUR workflows GREEN:
+  * CI (Windows): fmt, clippy -D warnings, core tests, 1M-node bench, typecheck, vitest 54, safety greps, frontend build, NSIS installer
+  * macOS Build: app-crate platform tests + dmg bundle
+  * UI Screenshots: 34 production-render frames
+  * Test Matrix: core+platform+benchmarks on windows-latest, macos-latest, macos-14
+- Pixel-verified CI renders: bubbles centered (-0,-4px in 1210x870); sunburst ring separators present
+- VLM claims that failed pixel verification were rejected (documented: hallucinated bubble offset)
+
+Stage Summary:
+- Repo: github.com/heictojpgpics/diskbytes_new (main)
+- Deliverables: 23 commits of polish, P0 bug fixes, loading v2, design-system v2, canvas keyboard nav + HEADER rendering, cross-platform CI green
