@@ -399,29 +399,27 @@
   position: relative;
 }
 /* Tab-swap wrapper (App.tsx AnimatePresence cover-style crossfade).
- * The ENTERING view (last DOM child) flows normally and fills the
- * column; any EXITING view is lifted out of flow by CSS alone — no JS
- * measurement, no injected style rules. A stuck or slow exit can never
- * push the live view down (the old popLayout approach had exactly that
- * failure mode). The entering wrapper is also positioned so it paints
- * above the absolute exiting one (DOM order wins among positioned
- * siblings). */
+ * The ENTERING view flows normally and fills the column; any EXITING
+ * view (data-exiting, set from usePresence — immune to framer's DOM
+ * reordering on interrupted swaps) is lifted out of flow by CSS
+ * alone — no JS measurement, no injected style rules, and never a
+ * live view. A stuck or slow exit can never push the live view down
+ * (the old popLayout approach had exactly that failure mode). All
+ * wrappers are positioned so paint order follows DOM order. */
 .db-tab-swap {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-.db-tab-swap:last-child {
   position: relative;
 }
-.db-tab-swap:not(:last-child) {
+.db-tab-swap[data-exiting] {
   position: absolute;
   inset: 0;
-  /* Dead the instant the child stops being last (same commit) — the
-   * framer exit transition's pointerEvents lands only when its DELAYED
-   * timeline starts, leaving a ~120 ms window where clicks on the
-   * half-faded entering view fall through to the old one's buttons. */
+  /* Dead the instant presence flips (same commit) — the framer exit
+   * transition's pointerEvents lands only when its DELAYED timeline
+   * starts, leaving a ~120 ms window where clicks on the half-faded
+   * entering view fall through to the old one's buttons. */
   pointer-events: none;
 }
 .db-body > .db-inspector-col {
@@ -467,7 +465,17 @@
     grid-template-columns: var(--sidebar-w-compact) minmax(0, 1fr) var(--inspector-w-compact);
   }
   .db-body:not(.has-inspector) {
-    grid-template-columns: var(--sidebar-w-compact) minmax(0, 1fr);
+    /* THREE tracks at every width (the inspector column is mounted
+     * whenever Explore is active — a 2-track rule here would wrap it
+     * onto an implicit second row and collapse the main column; the
+     * 0px↔px pair keeps the transition interpolable). */
+    grid-template-columns: var(--sidebar-w-compact) minmax(0, 1fr) 0px;
+  }
+  /* Hidden inspector = untouchable: visibility (not just width 0) keeps
+   * keyboard focus out of the clipped column — tabbing into invisible
+   * buttons loses focus into nowhere. */
+  .db-body:not(.has-inspector) > .db-inspector-col {
+    visibility: hidden;
   }
   .db-tabcaps button .db-tab-label {
     display: none;

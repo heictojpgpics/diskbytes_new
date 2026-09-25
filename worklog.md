@@ -901,3 +901,25 @@ Stage Summary:
 - The 70/30 layout break, continuous scanning, and memory balloon are structurally eliminated (no streaming events, no auto-scan, CSS-lifted exits)
 - Transitions are cover-style crossfades; canvas follows resizes via GPU transform; inspector animates smoothly
 - All user-reported bugs fixed; 3 next-round items implemented and verified
+
+---
+Task ID: uiux-6
+Agent: main
+Task: Review-agent fix batch (8 findings) + stage-swap key fix + crossfade verification
+
+Work Log:
+- Dispatched a read-only review agent on commit 47e93f5 — 8 verified findings
+- P1: compact-width body grid kept 2 tracks while the inspector column is always mounted on Explore → 3rd grid item wrapped to an implicit second row; fixed with a 3-track rule (0px track)
+- P2: DuplicatesView busy could wedge true forever (invalidation branch bumped scanSeq but never cleared busy; the in-flight finally is seq-guarded) — restored setBusy(false); guard now `!result || stale` so in-flight scans are also superseded on done→done bumps
+- Presence-attribute refactor: :not(:last-child) CSS was fragile against framer sync-mode DOM reordering on interrupted A→B→A swaps — replaced with data-exiting driven by useIsPresent() in TabSwap/StageSwap wrapper components (a live view can never be lifted, regardless of DOM order)
+- CRITICAL find during verification: StageSwap had NO key on its AnimatePresence child (the key lived inside on the motion.div) → unkeyed children → NO exit diffing → the instant mode swap WAS the user's residual "blink"; keyed the element — verified: 262ms cover-style exit, data-exiting on the removed node
+- Overlay rings now repaint after canvas unmount/remount (overlayRepaintRef; rings used to vanish below-40px dip-and-return)
+- Flame root-band label: measure the bold name width BEFORE the size font switch (overlap on 190-260px bands)
+- Mock flame rowH 120px cap parity with Rust
+- Hidden inspector: visibility:hidden (keyboard focus can no longer vanish into the clipped column)
+- Verified with timed MutationObserver probes (add→remove gaps = EXIT_COVERED window ~270ms on both tab and stage swaps); earlier "exit broken" readings were probe artifacts (case-sensitive selectors, stale vite modules, probe timing > exit window)
+- Final mode-switch video: 82 frames, ZERO blank frames, 12 gradual crossfade frames
+
+Stage Summary:
+- All 8 review findings fixed; stage-swap exit restored (the actual residual blink)
+- Crossfades verified with precise DOM timing probes on both levels

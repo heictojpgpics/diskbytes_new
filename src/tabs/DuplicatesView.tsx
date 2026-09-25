@@ -72,14 +72,17 @@ export function DuplicatesView() {
   // Tree-change invalidation: a new scan (sidebar) or a cleanup commit
   // can bump the generation while status stays "done" — the old
   // result's groups are stale (paths may no longer exist). Also kills
-  // any in-flight resolve (stale generation error otherwise lands
-  // AFTER the reset, showing an error banner over a valid state).
+  // any in-flight resolve (the superseded invoke's finally is guarded
+  // by scanSeq, so THIS branch must clear busy itself — otherwise a
+  // disk-scan start mid-hash wedges the "Scanning…" state until a tab
+  // remount) and un-sticks the stale-generation error banner case.
   useEffect(() => {
-    if (status !== "done" || (result && result.generation !== generation)) {
+    if (status !== "done" || !result || result.generation !== generation) {
       setResult(null);
       setKeeps(new Map());
       setExpanded(new Set());
       scanSeq.current += 1; // supersede any in-flight scan
+      setBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, generation]);

@@ -366,7 +366,9 @@ export function buildLayout(
       return 1 + best;
     };
     const levelsUsed = Math.max(1, rowsBelow(kids, 1));
-    const rowH = (height - 6) / (levelsUsed + 1);
+    // 120px cap = the Rust engine's row_h.min(120.0) (parity: a
+    // near-empty subtree stops at title-band height in both engines).
+    const rowH = Math.min(120, (height - 6) / (levelsUsed + 1));
     cells.push({
       id: rootId,
       depth: 0,

@@ -94,6 +94,8 @@ export function CanvasViz(props: CanvasVizProps) {
   const layoutRef = useRef<LayoutResult | null>(null);
   const namesRef = useRef<Map<number, string>>(new Map());
   const repaintRef = useRef<(() => void) | null>(null);
+  /** Latest-render overlay paint (see the canvasMounted effect). */
+  const overlayRepaintRef = useRef<((alpha?: number) => void) | null>(null);
   const paintTokenRef = useRef<{ cancelled: boolean }>({ cancelled: false });
 
   // ResizeObserver: SHELL size tracks IMMEDIATELY (every event — the
@@ -178,7 +180,15 @@ export function CanvasViz(props: CanvasVizProps) {
   // blank (pointer hit-testing kept working; only the paint was lost).
   const canvasMounted = size.w >= 40 && size.h >= 40;
   useEffect(() => {
-    if (canvasMounted) repaintRef.current?.();
+    if (canvasMounted) {
+      repaintRef.current?.();
+      // The OVERLAY canvas remounts blank (fresh element, default
+      // 300×150 bitmap) — selection/hover rings would vanish after a
+      // dip below 40px and back. paintOverlay's identity changes with
+      // layout, so it can't ride this effect's deps; the ref always
+      // holds the latest render's closure.
+      overlayRepaintRef.current?.();
+    }
   }, [canvasMounted]);
 
   // Layout fetch (keyed on the DEBOUNCED size — one IPC per resize
@@ -341,6 +351,8 @@ export function CanvasViz(props: CanvasVizProps) {
     },
     [layout, props.selectedId, cellsById, mode],
   );
+  // Latest overlay paint for out-of-band repaints (canvas remount).
+  overlayRepaintRef.current = paintOverlay;
 
   // Ring fade-in (120 ms, ease-out). Skipped under reduced motion.
   const ringAnim = useRef<number | null>(null);
@@ -821,12 +833,16 @@ function drawCells(
           ctx.textAlign = "left";
           ctx.font = `700 11.5px ${fontUi}`;
           const nameText = clipLabel(ctx, label, rw - 14);
+          // Measure at the NAME's font (700 11.5px) BEFORE the size
+          // font switch — nw decides whether both fit; measuring the
+          // bold name with the small font under-estimates and lets the
+          // right-aligned total overlap it on ~190-260px bands.
+          const nw = nameText ? ctx.measureText(nameText).width : 0;
           if (nameText) haloText(ctx, nameText, x + 7, midY, ON_PASTEL);
           if (c.size > 0 && rw >= 190) {
             ctx.font = `600 10px ${fontUi}`;
             const sizeStr = clipLabel(ctx, bytes(c.size), 84);
             if (sizeStr) {
-              const nw = nameText ? ctx.measureText(nameText).width : 0;
               const sw = ctx.measureText(sizeStr).width;
               if (x + 7 + nw + 12 + sw <= x + rw - 7) {
                 ctx.textAlign = "right";

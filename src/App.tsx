@@ -6,8 +6,8 @@
  * and the license dialog. Also mounts the DISKBYTES_TOUR driver (dev
  * hook §15 — CI screenshot tours).
  */
-import { useCallback, useEffect, useState } from "react";
-import { AnimatePresence, MotionConfig, motion } from "framer-motion";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { AnimatePresence, MotionConfig, motion, useIsPresent } from "framer-motion";
 
 import { TopBar } from "./shell/TopBar";
 import { Sidebar } from "./sidebar";
@@ -43,6 +43,28 @@ import "./styles/viz.css";
 import "./styles/inspector.css";
 import "./styles/tabs.css";
 import "./styles/overlays.css";
+
+/** Cover-style swap wrapper (tab level): the entering view fades in
+ * OVER the still-visible old one; the old one fades out only once
+ * covered, then unmounts. `data-exiting` (from usePresence, not DOM
+ * order — framer's sync mode can splice a restored key back at its
+ * old index on rapid A→B→A, which inverts :last-child) drives the CSS
+ * lift: the exiting wrapper is absolute + pointer-dead from the first
+ * frame of the swap, and a live view is never lifted. */
+function TabSwap({ children }: { children: ReactNode }) {
+  const isPresent = useIsPresent();
+  return (
+    <motion.div
+      className="db-tab-swap"
+      data-exiting={isPresent ? undefined : ""}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1, pointerEvents: "auto", transition: FADE_SWAP }}
+      exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_COVERED }}
+    >
+      {children}
+    </motion.div>
+  );
+}
 
 function AppShell() {
   const tab = useViewStore((s) => s.tab);
@@ -211,26 +233,15 @@ function AppShell() {
           <Sidebar />
         </div>
         <div className="db-main-col">
-          {/* Tab crossfade (cover-style): the entering view fades in
-           * OVER the still-fully-visible old one; the old one only
-           * fades out AFTER it is covered, then unmounts. The exiting
-           * wrapper is lifted out of flow by pure CSS (absolute,
-           * :not(:last-child)) — no JS measurement, no injected style
-           * rules; a stuck exit can never affect layout. */}
+          {/* Tab crossfade (cover-style): see TabSwap for the design. */}
           <AnimatePresence initial={false}>
-            <motion.div
-              key={tab}
-              className="db-tab-swap"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1, pointerEvents: "auto", transition: FADE_SWAP }}
-              exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_COVERED }}
-            >
+            <TabSwap key={tab}>
               {tab === "explore" && <ExploreView onPreview={openPreview} />}
               {tab === "duplicates" && <DuplicatesView />}
               {tab === "applications" && <ApplicationsView />}
               {tab === "monitor" && <MonitorView />}
               {tab === "snapshots" && <SnapshotsView />}
-            </motion.div>
+            </TabSwap>
           </AnimatePresence>
         </div>
         {/* Mounted whenever Explore is active (the track animates 0px ↔

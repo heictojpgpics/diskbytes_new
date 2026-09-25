@@ -5,8 +5,8 @@
  * shared interaction set (select, dblclick-open, context menu, hover
  * chip, preview) into every mode.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, animate, motion, useMotionValue, useTransform } from "framer-motion";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, animate, motion, useMotionValue, useTransform, useIsPresent } from "framer-motion";
 import { ExternalLinkIcon, FolderIcon, HardDriveIcon, ScanLineIcon, SquareIcon, UacShieldIcon } from "../components/Icon";
 import { EmptyState } from "../components/buttons";
 import { UnreadableNotice } from "../sidebar";
@@ -49,6 +49,24 @@ function ScanCounter({ files, totalBytes }: { files: number; totalBytes: number 
   // would spam assistive tech; the "Scanning…" heading already carries
   // the state, and scan completion announces through the store swap.
   return <motion.span className="db-live-counter tnum">{text}</motion.span>;
+}
+
+/** Cover-style swap wrapper (stage/mode level — see App.tsx TabSwap
+ * for the design): `data-exiting` from useIsPresent drives the CSS
+ * lift, immune to framer's DOM reordering on interrupted swaps. */
+function StageSwap({ children }: { children: ReactNode }) {
+  const isPresent = useIsPresent();
+  return (
+    <motion.div
+      className="db-stage-swap"
+      data-exiting={isPresent ? undefined : ""}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1, pointerEvents: "auto", transition: FADE_SWAP }}
+      exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_COVERED }}
+    >
+      {children}
+    </motion.div>
+  );
 }
 
 export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) {
@@ -380,13 +398,7 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
          * can never reflow the stage. `initial={false}` keeps the very
          * first mount static. */}
         <AnimatePresence initial={false}>
-          <motion.div
-            key={`${generation}:${currentFolder}:${mode}`}
-            className="db-stage-swap"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1, pointerEvents: "auto", transition: FADE_SWAP }}
-            exit={{ opacity: 0, pointerEvents: "none", transition: EXIT_COVERED }}
-          >
+          <StageSwap key={`${generation}:${currentFolder}:${mode}`}>
           {mode === "Folders" && (
             <FoldersMode
               generation={generation}
@@ -445,7 +457,7 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
               onHover={hoverFetch}
             />
           )}
-        </motion.div>
+        </StageSwap>
         </AnimatePresence>
       </section>
 
