@@ -92,11 +92,18 @@ jobs:
       - name: "Gate: vitest"
         run: npx vitest run --passWithNoTests
 
-      - name: "Gate: R7.1 — zero direct-delete APIs in src-tauri/src"
+      - name: "Gate: R7.1 — zero direct-delete APIs in src-tauri/src (R7.1-allow: test-scratch exemptions)"
         shell: bash
         run: |
-          if git grep -nE "remove_file|remove_dir|remove_dir_all|DeleteFileW|RemoveDirectoryW|SHEmptyRecycleBin" src-tauri/src; then
-            echo "::error::Direct-delete API found (R7.1 violation — cleanup must go through the Recycle Bin)";
+          # R7.1: production cleanup must go through the Recycle Bin. The
+          # ONLY exemption is a line carrying the explicit, greppable
+          # `R7.1-allow: test-scratch` marker (unit tests deleting their
+          # own %TEMP% scratch dirs — visible in review, impossible to
+          # slip in unnoticed).
+          VIOLATIONS=$(git grep -nE "remove_file|remove_dir|remove_dir_all|DeleteFileW|RemoveDirectoryW|SHEmptyRecycleBin" src-tauri/src | grep -v "R7.1-allow: test-scratch" || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::Direct-delete API found (R7.1 violation — cleanup must go through the Recycle Bin; only test-scratch lines carrying the R7.1-allow marker are exempt)";
+            echo "$VIOLATIONS";
             exit 1
           fi
 
