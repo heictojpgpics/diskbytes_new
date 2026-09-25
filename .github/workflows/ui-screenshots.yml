@@ -158,7 +158,7 @@ jobs:
           Start-Sleep -Milliseconds 5500
           $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
           $step = 0
-          $max = 34   # 24 tour slots (20 steps + 4 extra theme dwells) + drift margin
+          $max = 42   # 34 tour slots (duplicates-run dwells 10x on Defender-throttled runners) + drift margin
           while ($step -lt $max) {
             Start-Sleep -Milliseconds 2600
             if ($app.HasExited) { break }

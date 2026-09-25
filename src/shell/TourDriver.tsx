@@ -83,15 +83,18 @@ export function TourDriver() {
           apply: () => useViewStore.getState().setTab(t),
         });
       }
-      // duplicates: RUN the scan (3× dwell — the ~1 s pipeline + result
-      // render must land inside the capture window). Switch to the tab,
+      // duplicates: RUN the scan (10× dwell = 26 s — the Windows
+      // runner's real-time Defender charges ~0.6 s per first-open of
+      // the freshly-staged tree, so the real pipeline lands at ~25 s;
+      // the dwell must cover it so the RESULT state gets captured,
+      // not just the busy row). Switch to the tab,
       // then fire once the view is mounted + subscribed (poll — a fixed
       // delay races the veil swap's mount). The busy row and the group
       // cards are what production screenshots must show — the empty
       // state alone verified nothing about the pipeline.
       steps.push({
         name: "duplicates-run",
-        dwell: 3,
+        dwell: 10,
         apply: () => {
           useViewStore.getState().setTab("duplicates");
           const fire = () => window.dispatchEvent(new CustomEvent("db-tour-dupes-run"));
