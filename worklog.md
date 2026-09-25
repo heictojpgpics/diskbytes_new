@@ -923,3 +923,16 @@ Work Log:
 Stage Summary:
 - All 8 review findings fixed; stage-swap exit restored (the actual residual blink)
 - Crossfades verified with precise DOM timing probes on both levels
+---
+Task ID: uiux-7
+Agent: main
+Task: Flame fill polish + CI clippy fixes (final batch)
+
+Work Log:
+- VLM audit flagged a bottom dead zone in flame mode for normal-depth trees: the unconditional 120px row cap reintroduced empty rows; made the cap conditional (fat rows fill exactly for 2+ levels; 120px guard only for the degenerate 1-row case) — core flame tests updated (row_h=100 geometry), 196 green
+- CI on 9d09684: macOS Build + UI Screenshots green; "CI" (static gates) + Test Matrix "Core suite" failed on ONE root cause — the in-function `type PrefixBucket` alias (clippy::items_after_statements; app crate compiles only on CI runners, GTK unavailable locally)
+- Fix: hoisted PrefixBucket to module scope with a doc comment; clarified module + hash_full docs ("streaming" wording was stale post-revert)
+- Re-ran full battery: tsc ✓, 54 tests ✓, build ✓, 196 core tests ✓, core clippy ✓, fmt ✓; scanned app crate for other in-function items — none
+
+Stage Summary:
+- a911b33 pushed; both failing workflows share the single fixed root cause
