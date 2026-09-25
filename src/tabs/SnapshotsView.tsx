@@ -34,6 +34,7 @@ function fmtDate(unix: number): string {
 
 export function SnapshotsView() {
   const status = useScanStore((s) => s.status);
+  const startScan = useScanStore((s) => s.startScan);
   const generation = useScanStore((s) => s.generation);
   const currentFolder = useExploreStore((s) => s.currentFolder);
   const [list, setList] = useState<SnapshotView[] | null>(null);
@@ -96,7 +97,18 @@ export function SnapshotsView() {
   if (status === "idle" || status === "scanning") {
     return (
       <div className="db-tab db-scroll">
-        <EmptyState icon={<Clock3Icon size={28} />} title="Snapshots" body={status === "scanning" ? "Scan in progress — snapshots capture the tree when it’s done." : "Before/after diffs of any two scans of the same root."} />
+        <EmptyState
+          icon={<Clock3Icon size={28} />}
+          title="Snapshots"
+          body={status === "scanning" ? "Scan in progress — snapshots capture the tree when it’s done." : "Before/after diffs of any two scans of the same root."}
+          action={
+            status !== "scanning" ? (
+              <button type="button" className="db-ink-button auto" onClick={() => void startScan("ThisPC")}>
+                <CameraIcon size={14} /> Scan This PC
+              </button>
+            ) : undefined
+          }
+        />
       </div>
     );
   }

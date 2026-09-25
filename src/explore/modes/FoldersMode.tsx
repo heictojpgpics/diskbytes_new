@@ -248,6 +248,12 @@ export function FoldersMode(props: FoldersModeProps) {
                   style={{ ["--file-cat" as string]: `#${f.categoryColor.toString(16).padStart(6, "0")}` }}
                   onClick={() => props.onSelect(f.id)}
                   onDoubleClick={() => props.onPreview(f.id)}
+                  /* Enter on a focused file row previews it: dblclick was
+                   * the ONLY path to the preview from the grid — three
+                   * clicks deep for keyboard users otherwise. */
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") props.onPreview(f.id);
+                  }}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     props.onContextMenu(f.id, e.clientX, e.clientY);

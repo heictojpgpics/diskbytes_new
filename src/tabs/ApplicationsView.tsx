@@ -18,6 +18,7 @@ import { EVENTS, track } from "../lib/analytics";
 
 export function ApplicationsView() {
   const status = useScanStore((s) => s.status);
+  const startScan = useScanStore((s) => s.startScan);
   const apps = useApplicationsStore((s) => s.apps);
   const partial = useApplicationsStore((s) => s.partial);
   const busy = useApplicationsStore((s) => s.busy);
@@ -55,7 +56,18 @@ export function ApplicationsView() {
   if (status === "idle" || status === "scanning") {
     return (
       <div className="db-tab db-scroll">
-        <EmptyState icon={<AppWindowIcon size={28} />} title="Applications" body={status === "scanning" ? "Scan in progress — app footprints land here after the tree is ready." : "Every installed app, its leftovers, and one-click cleanup."} />
+        <EmptyState
+          icon={<AppWindowIcon size={28} />}
+          title="Applications"
+          body={status === "scanning" ? "Scan in progress — app footprints land here after the tree is ready." : "Every installed app, its leftovers, and one-click cleanup."}
+          action={
+            status !== "scanning" ? (
+              <button type="button" className="db-ink-button auto" onClick={() => void startScan("ThisPC")}>
+                <RefreshCwIcon size={14} /> Scan This PC
+              </button>
+            ) : undefined
+          }
+        />
       </div>
     );
   }

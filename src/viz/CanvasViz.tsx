@@ -1199,7 +1199,10 @@ function hitCell(cells: Cell[], _mode: string, x: number, y: number, center: [nu
     } else if (kind === CELL_KIND.CIRCLE || kind === CELL_KIND.DOT) {
       const dx = x - c.g[0];
       const dy = y - c.g[1];
-      if (dx * dx + dy * dy <= c.g[2] * c.g[2]) return c;
+      // DOTs pad their hit radius to a 7px floor: mind-map dots run
+      // 2.5-6px — sub-pointer targets that hover probes kept missing.
+      const hr = kind === CELL_KIND.DOT ? Math.max(c.g[2], 7) : c.g[2];
+      if (dx * dx + dy * dy <= hr * hr) return c;
     } else if (kind === CELL_KIND.ARC) {
       const dx = x - cx;
       const dy = y - cy;

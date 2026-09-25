@@ -32,6 +32,7 @@ interface DupesResult {
 export function DuplicatesView() {
   const status = useScanStore((s) => s.status);
   const generation = useScanStore((s) => s.generation);
+  const startScan = useScanStore((s) => s.startScan);
   const stageMany = useCleanupStore((s) => s.stageMany);
   const [result, setResult] = useState<DupesResult | null>(null);
   const [streamed, setStreamed] = useState<DupeGroup[]>([]);
@@ -142,6 +143,13 @@ export function DuplicatesView() {
           icon={<CopyIcon size={28} />}
           title="Duplicates"
           body={status === "scanning" ? "Scan in progress — duplicate detection starts once the tree is complete." : "Complete a disk scan to find duplicate files."}
+          action={
+            status !== "scanning" ? (
+              <button type="button" className="db-ink-button auto" onClick={() => void startScan("ThisPC")}>
+                <SearchIcon size={15} /> Scan This PC
+              </button>
+            ) : undefined
+          }
         />
       </div>
     );
