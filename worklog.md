@@ -643,3 +643,26 @@ Work Log:
 Stage Summary:
 - tsc + 54 tests + build green; keyboard nav verified live in browser (selection ring appears)
 - Next: final screenshots + VLM round 2, repo diskbytes_new + push + CI validation
+
+---
+Task ID: uiux-3
+Agent: main
+Task: CI bring-up + final validation
+
+Work Log:
+- Created heictojpgpics/diskbytes_new; pushed full history (182 MB)
+- CI round 1 failures (all pre-existing, newer clippy 1.98 / test bugs):
+  1. clippy: AbsorbedItem.absorbed_by never read → field removed, plan simplified
+  2. clippy: commit_cleanup 103/100 lines → cache-clear deduped into scan::clear_all_caches (pub)
+  3. clippy: items_after_statements in win.rs → const hoisted
+  4. mac.rs test: CJK/emoji fixtures staged in sub/ but asserted in parent listing → staged in listed dir
+  5. platform.rs test: asserted pre-Win32-strip name ("trailing.dot.") → now measures the OS-produced name via read_dir
+  6. my own follow-ups: leftover absorbed_by test assertion removed; redundant closure fixed
+- abbreviate(): lone-word budget+3 prefix ("Downloads"→"Downl…" not "D…") + tests
+- README: design-system v2 notes + documented evaluation of shadcn/daisyui/heroui/radix (not adopted — Tailwind-based frameworks would conflict with the hand-crafted canvas/token system; their PATTERNS were ported instead)
+- Final gates local: tsc ✓, 54 tests ✓, build ✓, safety grep ✓, cargo fmt ✓, core clippy ✓, core tests 152+13+16 ✓
+- VLM final round: sunburst per-ring separators verified; treemap headers verified; keyboard selection verified live
+
+Stage Summary:
+- Test Matrix: SUCCESS on f9d1ba1 (Win + macOS x64/arm64)
+- CI / macOS Build / UI Screenshots: completing
