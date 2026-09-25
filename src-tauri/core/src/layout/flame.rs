@@ -47,7 +47,17 @@ pub fn flame(
     // height capped at 120 so an empty folder's title band doesn't
     // stretch to full height.
     let levels = reachable_levels(tree, node, depth).max(1);
-    let row_h = (height / (levels + 1) as f32).min(120.0);
+    // Fat rows are FINE (2+ levels: bigger labels, exact height fill);
+    // the 120px cap only guards the degenerate 1-row case (an almost
+    // empty folder would otherwise stretch a single title band to full
+    // height). A blanket cap starved normal shallow trees of ~10% of
+    // the canvas (the VLM audit's bottom dead zone).
+    let rows = (levels + 1) as f32;
+    let row_h = if rows >= 3.0 {
+        height / rows
+    } else {
+        (height / rows).min(120.0)
+    };
     let mut cells: Vec<Cell> = Vec::with_capacity(512);
     let mut truncated = false;
     // By-folder families attach at the effective branch root: descend
