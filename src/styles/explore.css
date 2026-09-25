@@ -88,7 +88,14 @@
   flex-wrap: wrap;
 }
 
-/* Mode picker — icon-only capsule; the active one grows its label */
+/* Mode picker — icon-only capsule; the active one grows its label.
+ * `isolation: isolate` is load-bearing: the sliding pill is a negative
+ * z-index child (it must sit under the icon+label but OVER the capsule
+ * fill). Without a stacking context on the button the pill painted
+ * behind the picker's own background — the orange pill never rendered
+ * in ANY theme, and in light mode the active label (white --on-ink on
+ * the white --card capsule) vanished outright. Same defense as
+ * .db-tabcaps button. */
 .db-mode-picker {
   flex: none;
   display: flex;
@@ -101,6 +108,7 @@
 }
 .db-mode-picker button {
   position: relative;
+  isolation: isolate;
   height: 30px;
   min-width: 30px;
   display: flex;
@@ -138,25 +146,30 @@
   font-size: 12px;
 }
 
-/* Segmented control (color modes, top-sizes scopes) */
+/* Segmented control (color modes, top-sizes scopes, monitor sorts).
+ * Same capsule geometry as the mode picker — 30px buttons + 3px pad
+ * + 1px border = 38px total, radius-l outer / radius-m inner — so the
+ * three controls sit on one optical line. (It used to be 26px buttons
+ * in a 34px capsule: visibly shorter than its neighbours, the "one
+ * down, one up" mismatch.) */
 .db-segmented {
   flex: none;
   display: flex;
   align-items: center;
   border: 1px solid var(--control-border);
-  border-radius: var(--radius-m);
+  border-radius: var(--radius-l);
   padding: 3px;
   background: var(--card);
   gap: 1px;
 }
 .db-segmented button {
-  height: 26px;
+  height: 30px;
   border: 0;
-  border-radius: var(--radius-s);
+  border-radius: var(--radius-m);
   background: transparent;
   padding: 0 11px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 570;
   transition: color var(--fade) ease, background var(--fade) ease;
   white-space: nowrap;
@@ -205,15 +218,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* "A" abbreviate toggle — matches the capsule controls' 38px total
+ * height (36px box + 1px borders) so the toolbar reads as one line;
+ * radius-m mirrors the capsules' inner button radius. */
 .db-abbreviate {
   flex: none;
-  width: 27px;
-  height: 27px;
+  width: 36px;
+  height: 36px;
   border: 1px solid var(--control-border);
-  border-radius: var(--radius-s);
+  border-radius: var(--radius-m);
   background: var(--card);
   font-weight: 800;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
   transition: all var(--fade) ease;
 }

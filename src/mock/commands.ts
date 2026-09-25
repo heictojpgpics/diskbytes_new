@@ -792,18 +792,51 @@ const commands: Record<string, Cmd> = {
   },
 
   // ── duplicates ────────────────────────────────────────────────────
-  find_duplicates: () => ({
-    generation: tree.generation,
-    groups: DUPES,
-    wastedTotal: DUPES.reduce((s, g) => s + g.wasted, 0),
-    files: 3821,
-  }),
+  // STREAMING parity: groups emit as `dupes-group` events while the
+  // "hashing" window runs (mirroring the engine's best-value-first
+  // bucket emission); the command resolves with the authoritative
+  // result afterwards — the UI exercises the exact live path it runs
+  // in production Tauri.
+  find_duplicates: () =>
+    new Promise((resolve) => {
+      DUPES.forEach((g, i) => {
+        window.setTimeout(
+          () => emitMockEvent("dupes-group", { ...g, id: 10_000 + i }),
+          170 + i * 260 + Math.random() * 110,
+        );
+      });
+      window.setTimeout(
+        () =>
+          resolve({
+            generation: tree.generation,
+            groups: DUPES,
+            wastedTotal: DUPES.reduce((s, g) => s + g.wasted, 0),
+            files: 3821,
+          }),
+        170 + DUPES.length * 260 + 150,
+      );
+    }),
 
   // ── applications ──────────────────────────────────────────────────
-  list_applications: () => APPS,
+  // STREAMING parity: 16-row chunks emit as `applications-batch`
+  // events across a ~1.5 s measurement window (the engine streams per
+  // completed chunk from its rayon pass); the command resolves with
+  // the authoritative list afterwards.
+  list_applications: () =>
+    new Promise((resolve) => {
+      const chunks: unknown[][] = [];
+      for (let i = 0; i < APPS.length; i += 16) chunks.push(APPS.slice(i, i + 16));
+      chunks.forEach((chunk, ci) => {
+        window.setTimeout(
+          () => emitMockEvent("applications-batch", chunk),
+          140 + ci * 200 + Math.random() * 90,
+        );
+      });
+      window.setTimeout(() => resolve(APPS), 140 + chunks.length * 200 + 130);
+    }),
   uninstall_app: (a) => {
     console.info("[mock] uninstall_app", a);
-    return { ok: true, leftovers: [] };
+    return { closedProcesses: [], exitCode: 0, remainingLeftovers: [], removedEntry: true };
   },
 
   // ── monitor ───────────────────────────────────────────────────────

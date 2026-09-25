@@ -804,3 +804,25 @@ Work Log:
 Stage Summary:
 - Merge commit ready; UI/UX work fully intact (48 files untouched by merge); Rust core now the refactored production version
 - Next: push → CI monitor → user-reported bug batch (Free Pro text, mode-bar light-mode text, filter-bar sizing, monitor preload, mode-switch blink, streaming apps/dupes, uninstall popup)
+
+---
+Task ID: uiux-2
+Agent: main (Super Z)
+Task: User-reported bug batch — merge verification + 7 reported issues + streaming + polish
+
+Work Log:
+- MERGE VERIFIED: all 4 CI workflows GREEN on merge commit 451add1 (Windows + macOS)
+- FIXED (user report 1) 'Free' license chip collapsed to bare dot at ≤1280px (window minWidth = the trigger width): removed the font-size:0 collapse entirely — chip text now always renders (pixel-verified 66 text px at 1280)
+- FIXED (user report 2) mode-bar label invisible in light mode: ROOT CAUSE was z-index:-1 pill painting behind the capsule fill in BOTH themes (the orange pill never rendered anywhere; dark mode merely masked it with readable white-on-dark). `isolation: isolate` on .db-mode-picker button + defensive same on .db-tabcaps button. Pixel-verified: 547 orange px in light mode (was 0)
+- FIXED (user report 3) control height mismatch: segmented 26→30px buttons, A button 27→36px — all toolbar capsules now 38px total, radius-l outer / radius-m inner family
+- FIXED (user report 4) Monitor tab seconds-delay: sampler now bootstraps at app open (state/monitor.ts, App.tsx) — MonitorView is a pure consumer, tab renders live data instantly (verified: 4 cards, 0 skeletons)
+- FIXED (user report 5) mode/tab switch blink: popLayout crossfades at both levels (App tab swap + ExploreView stage swap) — old view stays visible over the new one's IPC/paint window. Video-verified: 0 blank frames in 153-frame recording
+- FIXED (user report 6) Applications/Duplicates streaming: Rust emits applications-batch (16-app chunks from rayon pass) + dupes-group (per-bucket, biggest-wasted-first); UI renders rows/groups live; mock parity implemented; auto-scan on Duplicates entry
+- FIXED (user report 7) uninstall dialog rebuilt: identity header (icon+publisher+version), footprint stat tiles, wrap-capable responsive actions, spinner running-state, Esc guarded mid-run
+- Review pass 1 (2 parallel agents) found 10 frontend + 4 Rust issues — ALL fixed: refresh skeleton stacking, dupes generation invalidation, monitor error-state brick, focus-trap window-level, popLayout pointer-events, streamed cap 200, ensureStreamListener race, streamed total:0, clippy type_complexity, too_many_lines headroom
+- Debugged + fixed a subtle React orphaned-DOM bug: duplicate streamed keys (StrictMode double-emission) corrupted child deletion → id-dedup + path-stable render keys
+- VLM audits: light-mode 6-surface PASS, responsive 1280/2560 PASS, uninstall dialog PASS; uninstall mock DTO crash fixed
+
+Stage Summary:
+- Gates: tsc 0, vitest 54/54, build OK, core 196 tests, fmt clean
+- Next: commit + push + CI monitor to green, review pass 2

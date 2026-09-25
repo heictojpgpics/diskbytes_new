@@ -12,13 +12,20 @@ use diskbytes_core::apps::{
 use diskbytes_core::platform::{KnownFolder, Platform};
 use rayon::prelude::*;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::platform::HostPlatform;
 use crate::state::AppState;
 
 /// Max apps returned (bounded IPC; installs >300 are rare).
 const APPS_CAP: usize = 500;
+/// Streaming chunk size for the measurement pass: one
+/// `applications-batch` event per completed chunk. 16 balances emission
+/// cadence (a 200-app install lands ~13 events over the measurement
+/// window) against rayon's parallel throughput (chunks run on separate
+/// workers; within a chunk the fs-bound measurements serialize, which
+/// the OS queue barely notices).
+const STREAM_CHUNK: usize = 16;
 
 /// The applications cache: one snapshot kept across tab switches.
 #[derive(Default)]
@@ -144,9 +151,12 @@ fn list_root(root_idx: usize, path: &str) -> RootListing {
     }
 }
 
-/// The full enumeration pipeline (blocking-pool body).
+/// The full enumeration pipeline (blocking-pool body). Emits each
+/// measured 16-app chunk as an `applications-batch` event (live
+/// streaming — the UI renders rows as they land instead of a full
+/// skeleton wait); the returned Vec stays the authoritative snapshot.
 #[allow(clippy::too_many_lines)] // one cohesive pipeline; splitting hurts clarity
-fn enumerate_apps(platform: HostPlatform) -> Vec<AppEntry> {
+fn enumerate_apps(platform: HostPlatform, app: &AppHandle) -> Vec<AppEntry> {
     // 1. Raw sources.
     let registry = crate::platform::os::registry_uninstall_entries();
     let msix = crate::platform::os::msix_packages().unwrap_or_default();
@@ -251,20 +261,37 @@ fn enumerate_apps(platform: HostPlatform) -> Vec<AppEntry> {
         }
     }
 
-    // 4. Bundle sizes + icons + leftovers, in parallel.
+    // 4. Bundle sizes + icons + leftovers, in parallel chunks — each
+    //    completed chunk STREAMS to the UI (`applications-batch`),
+    //    which renders measured rows while the rest still measure.
     let root_ref = &roots;
-    let mut out: Vec<AppEntry> = entries
+    let mut chunked: Vec<Vec<(AppEntry, AppIdentity)>> = Vec::new();
+    while !entries.is_empty() {
+        let take = entries.len().min(STREAM_CHUNK);
+        chunked.push(entries.drain(..take).collect());
+    }
+    let mut out: Vec<AppEntry> = chunked
         .into_par_iter()
-        .map(|(mut app, identity)| {
-            if !app.install_location.is_empty() {
-                let cluster = crate::platform::os::cluster_size(&app.install_location);
-                app.bundle_size = dir_allocated_size(&app.install_location, cluster);
-            }
-            app.leftovers = apps::find_leftovers(&identity, root_ref);
-            // Icon: DisplayIcon when present, else the install folder.
-            let icon_path = app.id.is_empty().then(String::new).unwrap_or_default();
-            let _ = icon_path;
-            app
+        .flat_map(|chunk| {
+            let measured: Vec<AppEntry> = chunk
+                .into_iter()
+                .map(|(mut app, identity)| {
+                    if !app.install_location.is_empty() {
+                        let cluster = crate::platform::os::cluster_size(&app.install_location);
+                        app.bundle_size = dir_allocated_size(&app.install_location, cluster);
+                    }
+                    app.leftovers = apps::find_leftovers(&identity, root_ref);
+                    // Streamed rows carry their TOTAL now (the UI sorts
+                    // and renders it live): bundle + leftovers, computed
+                    // identically to the final pass below.
+                    app.total = app
+                        .bundle_size
+                        .saturating_add(app.leftovers.iter().map(|g| g.size).sum());
+                    app
+                })
+                .collect();
+            let _ = app.emit("applications-batch", &measured);
+            measured
         })
         .collect();
 
@@ -305,6 +332,7 @@ fn enumerate_apps(platform: HostPlatform) -> Vec<AppEntry> {
 #[allow(clippy::needless_pass_by_value)] // State extraction is the tauri command contract
 pub async fn list_applications(
     refresh: Option<bool>,
+    app: AppHandle,
     platform: State<'_, Arc<HostPlatform>>,
     cache: State<'_, AppsCache>,
 ) -> Result<Vec<AppEntry>, String> {
@@ -330,7 +358,7 @@ pub async fn list_applications(
     if !first {
         // Someone else is enumerating.
         let platform = Arc::clone(&platform);
-        return tauri::async_runtime::spawn_blocking(move || enumerate_apps(*platform))
+        return tauri::async_runtime::spawn_blocking(move || enumerate_apps(*platform, &app))
             .await
             .map_err(|e| format!("applications thread failed: {e}"));
     }
@@ -338,7 +366,8 @@ pub async fn list_applications(
     // must be released or every later call would compute directly
     // forever (an error must not wedge the cache path).
     let platform = Arc::clone(&platform);
-    let result = tauri::async_runtime::spawn_blocking(move || enumerate_apps(*platform)).await;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || enumerate_apps(*platform, &app)).await;
     *cache.inflight.lock() = false;
     let result = result.map_err(|e| format!("applications thread failed: {e}"))?;
     *cache.done.lock() = Some(Arc::new(result.clone()));

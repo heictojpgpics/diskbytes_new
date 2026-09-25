@@ -24,13 +24,14 @@ import { useViewStore } from "./state/view";
 import { useScanStore } from "./state/scan";
 import { useExploreStore } from "./state/explore";
 import { useLicenseStore, attachLicenseEvents } from "./state/license";
+import { bootstrapMonitor } from "./state/monitor";
 import { getBreadcrumb, type CrumbData } from "./viz/exploreIpc";
 import { invoke } from "./lib/ipc";
 import { pushRecent } from "./sidebar/RecentSection";
 import { TourDriver } from "./shell/TourDriver";
 import { AppErrorBoundary } from "./shell/AppErrorBoundary";
 import { CheckIcon, ShieldIcon, Trash2Icon } from "./components/Icon";
-import { SPRING_TOAST } from "./lib/motion";
+import { SPRING_TOAST, FADE_SWAP, EXIT_FAST } from "./lib/motion";
 import { listen } from "./lib/ipc";
 import "./theme/tokens.css";
 import "./styles/base.css";
@@ -66,6 +67,10 @@ function AppShell() {
     attachLicenseEvents();
     void useLicenseStore.getState().load();
     useScanStore.getState().ensureListeners(); // scan-progress / scan-done / cleanup-committed (once)
+    // Sampler warms at BOOT, not at first Monitor-tab entry: the 2s
+    // cadence is app-lifetime, so the tab renders live data the moment
+    // it is opened (no mount-then-wait). See state/monitor.ts.
+    bootstrapMonitor();
   }, []);
 
   // Toast bus: any surface can raise a transient toast via the
@@ -201,11 +206,26 @@ function AppShell() {
           <Sidebar />
         </div>
         <div className="db-main-col">
-          {tab === "explore" && <ExploreView onPreview={openPreview} />}
-          {tab === "duplicates" && <DuplicatesView />}
-          {tab === "applications" && <ApplicationsView />}
-          {tab === "monitor" && <MonitorView />}
-          {tab === "snapshots" && <SnapshotsView />}
+          {/* Tab crossfade (popLayout): the OLD tab stays visible while
+           * the new one mounts — its first IPC round-trip / cache warm
+           * happens underneath, so the old hard-swap "blink" (blank
+           * frame + pop-in) is gone. Exiting view is popped absolute
+           * (db-main-col is position:relative). */}
+          <AnimatePresence mode="popLayout" initial={false}>
+            <motion.div
+              key={tab}
+              className="db-tab-swap"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1, transition: FADE_SWAP }}
+              exit={{ opacity: 0, transition: EXIT_FAST }}
+            >
+              {tab === "explore" && <ExploreView onPreview={openPreview} />}
+              {tab === "duplicates" && <DuplicatesView />}
+              {tab === "applications" && <ApplicationsView />}
+              {tab === "monitor" && <MonitorView />}
+              {tab === "snapshots" && <SnapshotsView />}
+            </motion.div>
+          </AnimatePresence>
         </div>
         {inspectorVisible && tab === "explore" && (
           <div className="db-inspector-col">

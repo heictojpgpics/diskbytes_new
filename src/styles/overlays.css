@@ -390,6 +390,95 @@
   color: var(--ink-strong);
 }
 
+/* ── Uninstall dialog (Applications) ──────────────────────────────────
+ * Identity header (app icon + publisher/version meta) + footprint stat
+ * tiles + responsive actions. Sits on the shared .db-dialog base. */
+.db-uninstall-dialog {
+  width: min(92vw, 480px);
+}
+.db-uninstall-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.db-uninstall-icon {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: var(--radius-m);
+  object-fit: contain;
+  background: var(--chip);
+  padding: 6px;
+}
+.db-uninstall-icon-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+}
+.db-uninstall-title {
+  min-width: 0;
+}
+.db-uninstall-title h3 {
+  margin: 0 0 3px;
+}
+.db-uninstall-meta {
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-weight: 560;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Footprint tiles: two peers + a full-width total — the numbers read
+ * at a glance instead of being buried in a sentence. */
+.db-uninstall-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.db-uninstall-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--panel);
+}
+.db-uninstall-stat span {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.db-uninstall-stat b {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.db-uninstall-stat-total {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  background: var(--card);
+}
+.db-uninstall-stat-total b {
+  color: var(--ink);
+}
+/* Actions: wrap-capable so the three-button row degrades to two lines
+ * at narrow dialog widths instead of clipping/overflowing; the
+ * primary keeps its ink treatment and full running-state affordance. */
+.db-uninstall-actions {
+  flex-wrap: wrap;
+}
+.db-uninstall-actions button {
+  flex: 0 1 auto;
+}
+
 /* ── Preview overlay ────────────────────────────────────────────────── */
 .db-preview {
   width: min(94vw, 900px);

@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AppWindowIcon, CheckIcon, PackageOpenIcon, RefreshCwIcon, Trash2Icon, ShieldIcon } from "../components/Icon";
 import { TailPath } from "../components/TailPath";
-import { EmptyState, SkeletonRows } from "../components/buttons";
+import { EmptyState, SkeletonRows, Spinner } from "../components/buttons";
 import { useFocusTrap } from "../lib/useFocusTrap";
 import { bytes, relativeAge } from "../lib/format";
 import { invoke } from "../lib/ipc";
@@ -19,6 +19,7 @@ import { EVENTS, track } from "../lib/analytics";
 export function ApplicationsView() {
   const status = useScanStore((s) => s.status);
   const apps = useApplicationsStore((s) => s.apps);
+  const partial = useApplicationsStore((s) => s.partial);
   const busy = useApplicationsStore((s) => s.busy);
   const error = useApplicationsStore((s) => s.error);
   const load = useApplicationsStore((s) => s.load);
@@ -33,14 +34,16 @@ export function ApplicationsView() {
 
   // Esc closes the uninstall confirm — every other dialog (license,
   // preview, queue) closes on Esc; this one was the lone exception.
+  // Guarded while RUNNING: the buttons are disabled mid-run, but Esc
+  // would otherwise close the dialog out from under the live uninstall.
   useEffect(() => {
     if (!confirm) return;
     const esc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setConfirm(null);
+      if (e.key === "Escape" && !uninstalling) setConfirm(null);
     };
     window.addEventListener("keydown", esc);
     return () => window.removeEventListener("keydown", esc);
-  }, [confirm]);
+  }, [confirm, uninstalling]);
 
   useEffect(() => {
     if (apps === null && !busy) {
@@ -57,7 +60,11 @@ export function ApplicationsView() {
     );
   }
 
-  const sorted = [...(apps ?? [])].sort((a, b) => b.total - a.total);
+  // Streaming: while the measurement pass runs, `partial` carries the
+  // already-measured rows — they render live (the sub-caption counts
+  // them); the authoritative `apps` snapshot replaces them on return.
+  const streaming = apps === null && partial.length > 0;
+  const sorted = [...(apps ?? partial)].sort((a, b) => b.total - a.total);
   const totalFootprint = sorted.reduce((a, x) => a + x.total, 0);
   const now = Math.floor(Date.now() / 1000);
 
@@ -93,7 +100,15 @@ export function ApplicationsView() {
         <div>
           <h1>Applications</h1>
           <span className="db-tab-sub">
-            {busy ? "Measuring bundles & leftovers…" : <><b>{sorted.length.toLocaleString()}</b> installed · <b>{bytes(totalFootprint)}</b> total</>}
+            {busy ? (
+              streaming ? (
+                <><b>{partial.length.toLocaleString()}</b> apps measured · streaming…</>
+              ) : (
+                "Measuring bundles & leftovers…"
+              )
+            ) : (
+              <><b>{sorted.length.toLocaleString()}</b> installed · <b>{bytes(totalFootprint)}</b> total</>
+            )}
           </span>
         </div>
         <div className="db-tab-head-actions">
@@ -128,15 +143,24 @@ export function ApplicationsView() {
         </div>
       )}
 
-      {busy && !apps && (
+      {busy && !streaming && sorted.length === 0 && (
         // Structure preview (loading system v2): app-row skeletons keep
         // the table's rhythm instead of collapsing to a spinner-in-a-void.
+        // Empty-content only: during a REFRESH (apps already rendered) or
+        // mid-stream (partial rows live), stacking skeletons over real
+        // rows double-paints the tab.
         <>
           <SkeletonRows rows={7} className="db-tab-skeleton" />
           <div className="db-loading-block" role="status">
             <span>Listing registry + Store apps, measuring sizes…</span>
           </div>
         </>
+      )}
+
+      {streaming && (
+        <div className="db-loading-block" role="status">
+          <span>Measuring bundle sizes — {partial.length} of the biggest apps already live…</span>
+        </div>
       )}
 
       {sorted.map((app) => {
@@ -220,19 +244,62 @@ export function ApplicationsView() {
       )}
 
       {confirm && (
-        <div className="db-scrim" role="dialog" aria-modal="true">
-          <div className="db-dialog" ref={confirmRef}>
-            <h3>Uninstall {confirm.name}?</h3>
+        <div className="db-scrim" role="dialog" aria-modal="true" aria-labelledby="db-uninstall-title">
+          <div className="db-dialog db-uninstall-dialog" ref={confirmRef}>
+            <div className="db-uninstall-head">
+              {confirm.icon ? (
+                <img className="db-uninstall-icon" src={confirm.icon} alt="" />
+              ) : (
+                <span className="db-uninstall-icon db-uninstall-icon-fallback">
+                  <AppWindowIcon size={22} />
+                </span>
+              )}
+              <div className="db-uninstall-title">
+                <h3 id="db-uninstall-title">Uninstall {confirm.name}?</h3>
+                <span className="db-uninstall-meta">
+                  {confirm.publisher || "Unknown publisher"}
+                  {confirm.version ? ` · v${confirm.version}` : ""}
+                  {confirm.source === "msix" ? " · Store package" : ""}
+                </span>
+              </div>
+            </div>
+
+            <div className="db-uninstall-stats" aria-label="Footprint breakdown">
+              <div className="db-uninstall-stat">
+                <span>Program files</span>
+                <b className="tnum">{bytes(confirm.bundleSize)}</b>
+              </div>
+              <div className="db-uninstall-stat">
+                <span>Leftovers</span>
+                <b className="tnum">{bytes(confirm.leftovers.reduce((a, g) => a + g.size, 0))}</b>
+              </div>
+              <div className="db-uninstall-stat db-uninstall-stat-total">
+                <span>Total footprint</span>
+                <b className="tnum">{bytes(confirm.total)}</b>
+              </div>
+            </div>
+
             <p>
-              <b>{bytes(confirm.bundleSize)}</b> program files · <b>{bytes(confirm.leftovers.reduce((a, g) => a + g.size, 0))}</b> leftovers.
-              {" "}Running the app’s own uninstaller keeps the registry and installer state intact — program files are never trashed directly.
+              Runs the app’s own uninstaller — registry and installer state stay intact; program
+              files are never trashed directly. Leftover data can be staged for review afterwards.
             </p>
-            <div className="db-dialog-actions">
-              <button type="button" className="db-outline auto" onClick={() => setConfirm(null)}>
+
+            <div className="db-dialog-actions db-uninstall-actions">
+              <button
+                type="button"
+                className="db-outline auto"
+                disabled={uninstalling}
+                onClick={() => setConfirm(null)}
+              >
                 Cancel
               </button>
               {confirm.leftovers.length > 0 && (
-                <button type="button" className="db-outline auto" onClick={() => stageLeftovers(confirm)}>
+                <button
+                  type="button"
+                  className="db-outline auto"
+                  disabled={uninstalling}
+                  onClick={() => stageLeftovers(confirm)}
+                >
                   <Trash2Icon size={13} /> Stage leftovers only
                 </button>
               )}
@@ -242,7 +309,15 @@ export function ApplicationsView() {
                 disabled={uninstalling}
                 onClick={() => void runUninstall(confirm)}
               >
-                <CheckIcon size={14} /> {uninstalling ? "Running…" : "Run uninstaller"}
+                {uninstalling ? (
+                  <>
+                    <Spinner size={15} weight={2.4} /> Running uninstaller…
+                  </>
+                ) : (
+                  <>
+                    <CheckIcon size={14} /> Run uninstaller
+                  </>
+                )}
               </button>
             </div>
           </div>

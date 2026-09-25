@@ -102,6 +102,12 @@
 }
 .db-tabcaps button {
   position: relative;
+  /* Contain the negative-z-index sliding pill (it currently works only
+   * because .db-topbar's z-index:5 forms a stacking context; if that
+   * ever changes the pill would sink behind the bar — same class of
+   * bug the mode picker had. isolation makes each button
+   * self-contained regardless.) */
+  isolation: isolate;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -382,6 +388,18 @@
   display: flex;
   flex-direction: column;
   background: var(--background);
+  /* Positioning context for the tab-swap popLayout crossfade: the
+   * EXITING tab is popped position:absolute and must overlay the
+   * entering one inside THIS column, not the page. */
+  position: relative;
+}
+/* Tab-swap wrapper (App.tsx AnimatePresence popLayout): fills the
+ * column so each view's own flex/scroll layout is unchanged. */
+.db-tab-swap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .db-body > .db-inspector-col {
   min-width: 0;
@@ -448,14 +466,10 @@
   .db-queue-button {
     padding: 0 9px;
   }
-  .db-license-chip {
-    width: 34px;
-    padding: 0;
-    justify-content: center;
-    font-size: 0;
-  }
-  .db-license-chip .db-dot {
-    width: 8px;
-    height: 8px;
-  }
+  /* The license chip NEVER collapses to a bare dot: the posture text
+   * (Free/Pro/Reconnect) is the information; a dot alone is unreadable
+   * state. The window's minWidth is 1280 and this query fires exactly
+   * there, so the old font-size:0 collapse showed the degenerate
+   * dot-only chip at the most common non-maximized size. The flexible
+   * breadcrumb (flex:1, min-width:0) absorbs the ~35px the text needs. */
 }

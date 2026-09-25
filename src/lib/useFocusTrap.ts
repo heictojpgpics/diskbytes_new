@@ -31,13 +31,19 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean
         first.focus();
       }
     };
-    el.addEventListener("keydown", onKey);
+    // WINDOW-level: the keydown must keep arriving even when focus has
+    // escaped the dialog — a focused action button that becomes
+    // `disabled` mid-flow (e.g. the uninstall running-state) blurs to
+    // <body>, and an element-scoped listener would let Tab walk the
+    // content BEHIND the scrim. The `!inside` branches above wrap it
+    // back in.
+    window.addEventListener("keydown", onKey);
     // Pull focus into the dialog on open; restore the opener on close.
     const prev = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const target = el.querySelector<HTMLElement>(FOCUSABLE);
     target?.focus();
     return () => {
-      el.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey);
       prev?.focus?.();
     };
   }, [active, ref]);

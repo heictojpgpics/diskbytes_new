@@ -338,3 +338,14 @@ kbd {
 ::view-transition-new(root) {
   z-index: 2;
 }
+
+/* Exiting popLayout children (tab + stage crossfades): framer's
+ * PopChild pops the outgoing view to position:absolute ABOVE the
+ * entering one but leaves it interactive for the exit window
+ * (~140 ms) — a fast click after a switch could hit the OLD tab's
+ * buttons. The pop wrapper carries data-motion-pop-id ONLY while
+ * exiting; neutralize pointer events there. Entering/current
+ * children are unaffected. */
+[data-motion-pop-id] {
+  pointer-events: none !important;
+}

@@ -11,7 +11,7 @@ use diskbytes_core::dupes::{self, DupeGroup, HashedFile};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::state::AppState;
 
@@ -106,6 +106,7 @@ fn hardlink_identity(_path: &std::path::Path) -> Option<(u64, u64)> {
 #[allow(clippy::needless_pass_by_value)] // State extraction is the tauri command contract
 pub async fn find_duplicates(
     generation: u64,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<DupesResult, String> {
     let tree = {
@@ -121,7 +122,7 @@ pub async fn find_duplicates(
         }
         Arc::clone(tree)
     };
-    let result = tauri::async_runtime::spawn_blocking(move || compute_dupes(&tree))
+    let result = tauri::async_runtime::spawn_blocking(move || compute_dupes(&tree, &app))
         .await
         .map_err(|e| format!("dupes thread failed: {e}"))?;
     Ok(result)
@@ -129,8 +130,13 @@ pub async fn find_duplicates(
 
 /// The full pipeline (spec §10 3-pass): collect → size groups →
 /// prefix/full hashes → hardlink exclusion → wasted-space ranking via
-/// the core.
-fn compute_dupes(tree: &diskbytes_core::scan::node::Tree) -> DupesResult {
+/// the core. Groups STREAM to the UI as `dupes-group` events while
+/// full hashing progresses (best-value-first: the largest buckets
+/// hash first, so the groups that dominate reclaimable space land
+/// first) — the command's return value stays the authoritative,
+/// fully-ranked result and replaces the streamed provisional rows.
+#[allow(clippy::too_many_lines)] // 3-pass pipeline + streaming emission; the pass structure is the spec
+fn compute_dupes(tree: &diskbytes_core::scan::node::Tree, app: &AppHandle) -> DupesResult {
     // Collect live files (cloud placeholders NEVER opened — R7.3).
     struct Candidate {
         path: String,
@@ -175,14 +181,27 @@ fn compute_dupes(tree: &diskbytes_core::scan::node::Tree) -> DupesResult {
 
     // Pass 3: full hash the prefix survivors only. Files ≤ PREFIX long
     // already have their full digest from pass 2 — reuse it verbatim.
+    // BUCKET-ORDERED, BIGGEST ESTIMATED WASTED FIRST: the streaming
+    // emission below sends each completed bucket's ranked groups as
+    // they land, so ordering by value puts the reclaim-heavy groups on
+    // screen first (the "no waiting" experience).
+    // (Type written as Vec<_>: the spelled-out tuple trips
+    // clippy::type_complexity, which CI denies — inference carries it.)
+    let mut prefix_order: Vec<_> = by_prefix
+        .into_iter()
+        .filter(|(_, g)| g.len() >= 2)
+        .collect();
+    prefix_order.sort_by_key(|((size, _), g)| {
+        std::cmp::Reverse(g.len() as u64 * *size) // estimated upper bound
+    });
+
     let mut hashed: Vec<HashedFile> = Vec::new();
-    for ((size, prefix_digest), group) in &by_prefix {
-        if group.len() < 2 {
-            continue; // Prefix mismatch — not duplicates, skip the full read.
-        }
-        for c in group {
-            let digest = if *size <= PREFIX {
-                Some(*prefix_digest)
+    let mut stream_id: usize = 0;
+    for ((size, prefix_digest), group) in prefix_order {
+        let bucket_start = hashed.len();
+        for c in &group {
+            let digest = if size <= PREFIX {
+                Some(prefix_digest)
             } else {
                 hash_full(std::path::Path::new(&c.path))
             };
@@ -193,11 +212,27 @@ fn compute_dupes(tree: &diskbytes_core::scan::node::Tree) -> DupesResult {
                 .unwrap_or((u64::MAX, u64::from(c.id)));
             hashed.push(HashedFile {
                 path: c.path.clone(),
-                size: *size,
+                size,
                 volume_serial: vs,
                 file_index: fi,
                 sha256,
             });
+        }
+        // STREAM this bucket's ranked groups as soon as its full hashes
+        // land (provisional ids; the final result re-ids by global
+        // wasted order and replaces them — the UI keys transient state
+        // by path list, so the swap is seamless).
+        for g in dupes::rank(&hashed[bucket_start..]) {
+            let count = g.files.len() as u64;
+            let view = DupeGroupView {
+                id: stream_id,
+                paths: g.files,
+                size: g.size,
+                count,
+                wasted: g.wasted,
+            };
+            stream_id += 1;
+            let _ = app.emit("dupes-group", &view);
         }
     }
 

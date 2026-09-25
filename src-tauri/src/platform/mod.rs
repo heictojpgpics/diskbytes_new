@@ -1,6 +1,9 @@
-//! App-side platform module: the Windows implementation of the core
-//! [`Platform`](diskbytes_core::platform::Platform) seam (doc 02 §2).
-//! `win.rs` is the ONLY file allowed to call windows-rs directly.
+//! App-side platform module: the Windows and macOS implementations of
+//! the core [`Platform`](diskbytes_core::platform::Platform) seam (doc
+//! 02 §2). Each OS lives in a module directory (`win/`, `mac/`) split
+//! by concern (dir walking, apps, monitor, recycle, license, sysinfo);
+//! code under `platform::win` / `platform::mac` is the ONLY place
+//! allowed to call windows-rs / CoreFoundation directly.
 
 pub use diskbytes_core::platform::{DirEntryData, DirListing, KnownFolder, ListError, Platform};
 

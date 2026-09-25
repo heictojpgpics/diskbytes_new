@@ -6,7 +6,7 @@
  * chip, preview) into every mode.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { animate, motion, useMotionValue, useTransform } from "framer-motion";
+import { AnimatePresence, animate, motion, useMotionValue, useTransform } from "framer-motion";
 import { ExternalLinkIcon, FolderIcon, HardDriveIcon, ScanLineIcon, SquareIcon } from "../components/Icon";
 import { EmptyState } from "../components/buttons";
 import { UnreadableNotice } from "../sidebar";
@@ -30,7 +30,7 @@ import { CANVAS_MODES } from "../state/vizUi";
 import { getHoverDetails } from "../viz/layoutIpc";
 import { getNodeDetails, type NodeDetailsData } from "../viz/exploreIpc";
 import { EVENTS, track } from "../lib/analytics";
-import { FADE_SWAP } from "../lib/motion";
+import { FADE_SWAP, EXIT_FAST } from "../lib/motion";
 
 /** Smoothly-rolling "N files · X GB" live counter (motion values, no
  * per-tick React re-render churn — the 150 ms IPC ticks TWEEN into each
@@ -336,16 +336,20 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
         <UnreadableNotice />
       </div>
       <section className="db-visual-stage db-scroll" aria-label={`${mode} visualization`}>
-        {/* Keyed swap: instant unmount of the old view, 150 ms fade-up
-         * for the new one (mode switch / drill-down / rescan). The
-         * header + toolbar above stay mounted — only the data swaps. */}
-        <motion.div
-          key={`${generation}:${currentFolder}:${mode}`}
-          className="db-stage-swap"
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={FADE_SWAP}
-        >
+        {/* Mode-swap CROSSFADE (popLayout): the old view fades out OVER
+         * the entering one, which covers the new canvas's layout-IPC
+         * window (mount → blank → fetch → paint was the reported
+         * "blink"). The exiting wrapper is popped absolute inside the
+         * relative stage, so no layout shift and no blank frame.
+         * `initial={false}` keeps the very first mount static. */}
+        <AnimatePresence mode="popLayout" initial={false}>
+          <motion.div
+            key={`${generation}:${currentFolder}:${mode}`}
+            className="db-stage-swap"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1, transition: FADE_SWAP }}
+            exit={{ opacity: 0, transition: EXIT_FAST }}
+          >
           {mode === "Folders" && (
             <FoldersMode
               generation={generation}
@@ -405,6 +409,7 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
             />
           )}
         </motion.div>
+        </AnimatePresence>
       </section>
 
       <HoverChip ref={chip} sizeFmt={bytes} />

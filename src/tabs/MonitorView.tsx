@@ -2,37 +2,16 @@
  * Monitor tab (spec §12): 2×2 cards (CPU big% + sparkline, Memory
  * segmented bar + sparkline, Network, Storage volumes + sparkline) +
  * Top Processes table (CPU/MEM sort, filter, Show-all). The sampler
- * runs in Rust (2 s events); the UI keeps a 120-sample ring.
+ * session is app-lifetime and starts at BOOT (state/monitor.ts —
+ * App.tsx calls bootstrapMonitor() before the first tab renders), so
+ * this view is a pure consumer of the shared ring: no mount/start/stop
+ * lifecycle, no first-open wait.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { ActivityIcon, CpuIcon, HardDriveIcon, MemoryStickIcon, WifiIcon } from "../components/Icon";
 import { EmptyState, Skeleton } from "../components/buttons";
-import { invoke, listen } from "../lib/ipc";
 import { bytes } from "../lib/format";
-
-interface Sample {
-  dtMs: number;
-  cpuUserPct: number;
-  cpuSystemPct: number;
-  cpuTotalPct: number;
-  threads: number;
-  processes: number;
-  memTotal: number;
-  memAvailable: number;
-  kernelPaged: number;
-  kernelNonpaged: number;
-  systemCache: number;
-  commitTotal: number;
-  commitLimit: number;
-  compressed: number | null;
-  netDownBps: number;
-  netUpBps: number;
-  sessionIn: number;
-  sessionOut: number;
-  volumes: { root: string; label: string; total: number; free: number }[];
-  procs: { pid: number; name: string; cpuPct: number; ws: number }[];
-  totalProcs: number;
-}
+import { useMonitorStore, type MonitorSample } from "../state/monitor";
 
 const RING = 120;
 
@@ -62,66 +41,20 @@ function Sparkline({ values, color, height = 44 }: { values: number[]; color: st
 }
 
 export function MonitorView() {
-  const [ring, setRing] = useState<Sample[]>([]);
+  const ring = useMonitorStore((s) => s.ring);
+  const monitorError = useMonitorStore((s) => s.error);
+  const monitorStarted = useMonitorStore((s) => s.started);
   const [showAll, setShowAll] = useState(false);
   const [sort, setSort] = useState<"cpu" | "mem">("cpu");
   const [filter, setFilter] = useState("");
-  const [started, setStarted] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [volsShown, setVolsShown] = useState(3);
-  const ringRef = useRef<Sample[]>([]);
 
-  useEffect(() => {
-    let un: (() => void) | null = null;
-    let disposed = false;
-    let session: number | null = null;
-    // The start is async: a fast unmount can run the cleanup BEFORE the
-    // session handle arrives. The stop must be CHAINED after the start —
-    // fired immediately it could land before (or after, unsequenced) our
-    // own start and kill a sampler a newer mount owns.
-    let startSettled: Promise<void> = Promise.resolve();
-    startSettled = (async () => {
-      try {
-        const unlisten = await listen<Sample>("monitor-sample", (s) => {
-          ringRef.current = [...ringRef.current.slice(-(RING - 1)), s];
-          setRing(ringRef.current);
-        });
-        if (disposed) {
-          unlisten();
-          return;
-        }
-        un = unlisten;
-        // The engine returns a session handle: the cleanup's stop is
-        // ignored when a NEWER mount already restarted the sampler
-        // (StrictMode remount + async IPC can reorder stop-before-start).
-        const s = await invoke<number>("monitor_start").catch((e) => {
-          setError(String(e));
-          return null;
-        });
-        session = typeof s === "number" ? s : null;
-        setStarted(true);
-      } catch (e) {
-        setError(String(e));
-      }
-    })();
-    return () => {
-      disposed = true;
-      un?.();
-      void startSettled.then(() => {
-        // session null = the start failed → nothing of ours is running.
-        if (session != null) {
-          void invoke("monitor_stop", { session }).catch(() => undefined);
-        }
-      });
-    };
-  }, []);
+  const latest = ring[ring.length - 1] as MonitorSample | undefined;
 
-  const latest = ring[ring.length - 1];
-
-  if (error && !started) {
+  if (monitorError && !monitorStarted) {
     return (
       <div className="db-tab db-scroll">
-        <EmptyState icon={<ActivityIcon size={28} />} title="Monitor unavailable" body={error} />
+        <EmptyState icon={<ActivityIcon size={28} />} title="Monitor unavailable" body={monitorError} />
       </div>
     );
   }
