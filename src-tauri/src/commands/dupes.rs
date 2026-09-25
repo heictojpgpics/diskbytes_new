@@ -1,6 +1,6 @@
 //! Duplicates commands (spec §10; doc 03 M8): the 3-pass flow
-//! (size-grouping, 64 KiB prefix SHA-256, full hashing for matches)
-//! streamed in 1 MiB chunks. Hardlink exclusion via
+//! (size-grouping, 64 KiB prefix SHA-256, full hashing for matches,
+//! both hash passes parallel on rayon). Hardlink exclusion via
 //! (volume-serial, file-index); cloud placeholders never open (R7.3);
 //! wasted-space ranking per the spec.
 
@@ -18,8 +18,13 @@ use crate::state::AppState;
 
 /// Prefix-hash chunk (64 KiB, spec §10).
 const PREFIX: u64 = 64 * 1024;
-/// Full-hash streaming chunk (1 MiB, spec §10).
+/// Full-hash read chunk (1 MiB, spec §10).
 const CHUNK: usize = 1024 * 1024;
+
+/// A pass-3 group: `((size, prefix digest), candidate indices)` —
+/// prefix survivors with ≥ 2 members that need full hashing. (A type
+/// alias because the spelled-out tuple trips `clippy::type_complexity`.)
+type PrefixBucket = ((u64, [u8; 32]), Vec<usize>);
 
 /// One duplicate-group row for the UI.
 #[derive(Debug, Clone, Serialize)]
@@ -69,7 +74,7 @@ fn hash_prefix(path: &std::path::Path) -> Option<[u8; 32]> {
     Some(digest)
 }
 
-/// Full-hash streaming (pass 3, 1 MiB chunks). `None` = unreadable.
+/// Full hash (pass 3, read in 1 MiB chunks). `None` = unreadable.
 fn hash_full(path: &std::path::Path) -> Option<[u8; 32]> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).ok()?;
@@ -195,8 +200,6 @@ fn compute_dupes(tree: &diskbytes_core::scan::node::Tree) -> DupesResult {
     // streaming path needed is gone, and `rank` re-sorts globally
     // anyway. Files ≤ PREFIX long already have their full digest from
     // pass 2 — reused verbatim, zero re-reads.
-    // (Spelled-out tuple trips clippy::type_complexity — CI denies it.)
-    type PrefixBucket = ((u64, [u8; 32]), Vec<usize>);
     let survivors: Vec<PrefixBucket> = by_prefix
         .into_iter()
         .filter(|(_, g)| g.len() >= 2)
