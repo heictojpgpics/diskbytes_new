@@ -19,9 +19,12 @@ describe("abbreviate labels (spec §7 'A' toggle)", () => {
   });
 
   it("single long words truncate with an ellipsis", () => {
+    // budget + 3 prefix (a lone word at 2 chars read as one glyph:
+    // "D…" — the cell's own pixel clip would have kept more).
     const out = abbreviate("aaaaaaaaaaaaaaaa", 5);
-    expect(out.length).toBe(5);
+    expect(out).toBe("aaaaaaaa…");
     expect(out.endsWith("…")).toBe(true);
+    expect(abbreviate("Downloads", 2)).toBe("Downl…");
   });
 
   it("zero budget returns empty (tiny cells skip labels)", () => {

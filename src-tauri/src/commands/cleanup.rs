@@ -190,15 +190,10 @@ pub async fn commit_cleanup(
     };
 
     // Generation-keyed caches ALL drop (scan-swap path clears the same
-    // set — reuse it by hand here because the tree did not rescan).
-    crate::commands::layout::clear_cache(&app.state::<crate::commands::layout::Cache>());
-    crate::commands::layout::clear_regroup_cache(
-        &app.state::<crate::commands::layout::RegroupCache>(),
-    );
-    crate::commands::explore::TopCache::clear(&app.state::<crate::commands::explore::TopCache>());
-    crate::commands::explore::AgeCache::clear(&app.state::<crate::commands::explore::AgeCache>());
-    app.state::<crate::commands::sidebar::QuickWinsCache>()
-        .clear_pub();
+    // set — one shared helper, no hand-duplicated list). The apps
+    // snapshot additionally refreshes: recycled leftovers shrink the
+    // bundle/leftover sizes it reports.
+    crate::commands::scan::clear_all_caches(&app);
     app.state::<crate::commands::applications::AppsCache>()
         .clear();
 

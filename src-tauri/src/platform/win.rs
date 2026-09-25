@@ -1026,6 +1026,18 @@ pub fn enable_backup_privilege() -> bool {
         TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES,
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    // AdjustTokenPrivileges returns TRUE even when the privilege was NOT
+    // assigned: the not-assigned signal is ERROR_NOT_ALL_ASSIGNED (1300)
+    // in last-error. The old check compared against 1313
+    // (ERROR_NO_SUCH_PRIVILEGE) — impossible here, since a bad privilege
+    // NAME already failed at LookupPrivilegeValueW above — so an
+    // elevated-but-filtered process (no SeBackupPrivilege hold) was
+    // told the privilege was granted and turbo proceeded to fail
+    // opaquely instead of taking the honest user-visible fallback.
+    // (Declared before the statements: items-after-statements reads as
+    // scope confusion at review distance.)
+    const ERROR_NOT_ALL_ASSIGNED: windows::Win32::Foundation::WIN32_ERROR =
+        windows::Win32::Foundation::WIN32_ERROR(1300);
     let wide = wide("SeBackupPrivilege");
     let mut luid = LUID::default();
     // SAFETY: NUL-terminated privilege name; LUID out valid.
@@ -1048,16 +1060,6 @@ pub fn enable_backup_privilege() -> bool {
     // SAFETY: GetLastError immediately after the AdjustTokenPrivileges
     // call on this thread.
     let last_err = unsafe { windows::Win32::Foundation::GetLastError() };
-    // AdjustTokenPrivileges returns TRUE even when the privilege was NOT
-    // assigned: the not-assigned signal is ERROR_NOT_ALL_ASSIGNED (1300)
-    // in last-error. The old check compared against 1313
-    // (ERROR_NO_SUCH_PRIVILEGE) — impossible here, since a bad privilege
-    // NAME already failed at LookupPrivilegeValueW above — so an
-    // elevated-but-filtered process (no SeBackupPrivilege hold) was
-    // told the privilege was granted and turbo proceeded to fail
-    // opaquely instead of taking the honest user-visible fallback.
-    const ERROR_NOT_ALL_ASSIGNED: windows::Win32::Foundation::WIN32_ERROR =
-        windows::Win32::Foundation::WIN32_ERROR(1300);
     let granted = ok.is_ok() && last_err != ERROR_NOT_ALL_ASSIGNED;
     // SAFETY: handle balance.
     unsafe { CloseHandle(token) }.ok();

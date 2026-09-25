@@ -617,8 +617,10 @@ pub async fn start_scan_turbo(
     Ok(generation)
 }
 
-/// Clear every generation-keyed cache (shared by the scan swap paths).
-fn clear_all_caches(app: &AppHandle) {
+/// Clear every generation-keyed cache (shared by the scan swap paths
+/// AND the cleanup commit — the commit path used to hand-duplicate
+/// this list, and the two copies were already drifting).
+pub fn clear_all_caches(app: &AppHandle) {
     crate::commands::layout::clear_cache(&app.state::<crate::commands::layout::Cache>());
     crate::commands::layout::clear_regroup_cache(
         &app.state::<crate::commands::layout::RegroupCache>(),

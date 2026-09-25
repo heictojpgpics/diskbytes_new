@@ -2042,8 +2042,13 @@ mod tests {
         // UTF-8; the old byte-widening turned "café" into "cafÃ©" and
         // mangled every supplementary-plane name).
         std::fs::write(dir.join("café.txt"), b"accents").expect("stage café");
-        std::fs::write(sub.join("日本語.md"), b"cjk").expect("stage 日本語");
-        std::fs::write(sub.join("emoji-📁.txt"), b"non-bmp").expect("stage emoji");
+        // CJK + non-BMP names stage into THE LISTED DIRECTORY — the
+        // mojibake asserts read `dir`'s listing, and these used to be
+        // written into `sub` (one level down, never enumerated), so the
+        // CJK assert could only ever see a staged-elsewhere file and
+        // failed on every real macOS run.
+        std::fs::write(dir.join("日本語.md"), b"cjk").expect("stage 日本語");
+        std::fs::write(dir.join("emoji-📁.txt"), b"non-bmp").expect("stage emoji");
         let listing = MacPlatform.list_dir(&dir.to_string_lossy());
         assert!(listing.error.is_none(), "engine error: {:?}", listing.error);
         let names: Vec<String> = listing
