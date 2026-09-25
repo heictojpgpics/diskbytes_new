@@ -746,6 +746,7 @@ mod tests {
             // readable): hold it open with NO sharing for the whole test.
             fs::write(root.join("small-locked.bin"), &small).unwrap();
             let _locked = std::fs::OpenOptions::new()
+                .read(true)
                 .share_mode(0)
                 .open(root.join("small-locked.bin"))
                 .expect("open locked");
