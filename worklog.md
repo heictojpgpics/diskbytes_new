@@ -979,3 +979,22 @@ Stage Summary:
 - Transitions: ghost-free veil swap at both tab and mode level, 200 ms end-to-end, dark-mode clean
 - Mind map fills the canvas; UAC shield is the user's exact SVG
 - Next: push → monitor all 4 workflows on real Windows/macOS runners → pull screenshots → VLM-verify the production dupes result + transitions
+
+---
+Task ID: uiux-9 (session 4, cont.) — the CI convergence loop: tauri #13419, the manifest fix, and the production dupes verification
+Agent: main (Super Z)
+Task: Close the CI failures (clippy lints → test-exe load failure → R7.1 gate → dwell) and VLM-verify the production Windows build
+
+Work Log:
+- CI loop round 1: 4 app-crate clippy lints (quiet dead-code → cfg(all(test, windows)); State pass-by-value allow; finish_pipeline takes slices; sort_unstable)
+- CI loop round 2: `cargo test --workspace` on Windows failed BEFORE any test ran: the debug unit-test exe wouldn't LOAD — STATUS_ENTRYPOINT_NOT_FOUND, reproducible across fresh runners and cache-purged full rebuilds, while the RELEASE app ran green. A dumpbin /imports diagnostic step (added to ci.yml) identified the culprit import: TaskDialogIndirect (comctl32 v6 SxS-only export). Root cause = KNOWN tauri issue #13419: tauri-build's resource manifest lands in the app BIN only; cargo cannot scope link args to the lib's unit-test harness; any test reachable into tauri's windowing stack breaks the exe load. Session-4's deeper test reachability (scan + platform + pipeline) pulled that stack into the test binary — the pre-session-4 exe didn't reach it
+- FIXED with the OFFICIAL tauri pattern (examples/api/src-tauri/build.rs): WindowsAttributes::new_without_app_manifest() + /MANIFEST:EMBED + /MANIFESTINPUT link-args for ALL targets (src-tauri/windows-app-manifest.xml = the canonical common-controls v6 dependency). Test exes load; release app unchanged (same manifest content)
+- CI loop round 3: my E2E test's locked-file open lost .read(true) in an edit — InvalidInput; restored
+- CI loop round 4: the R7.1 direct-delete gate flagged the test's %TEMP% scratch cleanup — added the greppable same-line `R7.1-allow: test-scratch` exemption (unit tests deleting their own scratch dirs; production code unchanged)
+- THE DUPES SPEED TRUTH (stderr phase tracing in the production run): NOT a hang — collect 0.9 ms; prefix 29 targets 17 s on the first run / 4.5 ms on the second (windows-latest Defender charges ~0.6 s per first-open of freshly-staged multi-GB files); full pass = 9.44 GB of TRUE duplicates (the CI tree's same-size zero-filled sparse files are byte-identical — the pipeline is correct); resolved at 25.1 s / 6.3 s across runs. The earlier "frozen 0/29 busy row" was a 7.8 s tour dwell vs a Defender-throttled 25 s pipeline. This is also the REAL-USER story: hundreds of same-size candidates × Defender first-open cost + GB-scale full hashes = the "scanning forever" report — now with live progress, throughput and cancel
+- Tour dwell for duplicates-run 3× → 10× (26 s), harness capture budget 34 → 42 so the RESULT state lands in production captures; dumpbin diag step retired; phase tracing kept (doc 07 perf-watchdog pattern, lands in app-stderr.log)
+- PRODUCTION VERIFICATION (Windows runner screenshots + VLM): result frame — "6.79 GB could be reclaimed across 4 groups · 148 files considered" with group cards ("4 copies · 1.25 GB each (3.75 GB wasted)", "5 copies · 768 MB each", "8 copies · 5.00 MB each"), Keep/Stage controls, no busy row, no defects; mid-run frame — "Verifying full contents… 23 / 29 files · 2.79 GB / 8.79 GB · 1918 MB/s" + Cancel; app-stderr shows the full trace ending "await resolved at 6.27 s"
+- ALL 4 WORKFLOWS GREEN on 6cd5590: CI (static gates + workspace tests incl. the Windows dupes E2E + NSIS bundle), Test Matrix (all platforms), macOS Build, UI Screenshots
+
+Stage Summary:
+- Session 4 complete: dupes liveness+cancel+speed with production-proof; ghost-free veil swaps; mind map fills the canvas; the user's exact UAC shield; the tauri #13419 test-binary fix (a repo-level win beyond this feature); CI fully green with the real duplicates result captured
