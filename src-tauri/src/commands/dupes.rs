@@ -502,7 +502,14 @@ pub async fn find_duplicates(
     });
     let compute_ctl = Arc::clone(&ctl);
     let started = ctl.started; // Instant is Copy
-    let result = tauri::async_runtime::spawn_blocking(move || {
+
+    // The join is a DOUBLE Result: outer = JoinError (thread failure),
+    // inner = the pipeline's own Ok/Err. The session-4 code flattened
+    // with an early `?` — which also early-returned on a join failure,
+    // skipping `finished.store` (the ticker thread leaked) and leaving
+    // `dupes_status.running` stuck true. Matching BOTH layers in one
+    // place (below) settles the record for every outcome.
+    let joined = tauri::async_runtime::spawn_blocking(move || {
         eprintln!("[dupes] spawn_blocking task ENTERED");
         let out = compute_dupes(&tree, compute_ctl.as_ref());
         eprintln!("[dupes] compute finished at {:?}", started.elapsed());
@@ -514,9 +521,11 @@ pub async fn find_duplicates(
     finished.store(true, Ordering::Relaxed);
     // Terminal resolution: settle the app-lifetime record + the event
     // stream in ONE place (cancel is a quiet reset — no error banner;
-    // a failure records the message for the re-attached view).
-    let terminal = match &result {
-        Ok(res) => {
+    // a failure — pipeline OR join — records the message for the
+    // re-attached view). The or-pattern binds `msg: &String` on both
+    // the pipeline error and the join error.
+    let terminal = match &joined {
+        Ok(Ok(res)) => {
             ctl.set_phase(PHASE_DONE, 0, 0);
             let mut st = status_out.lock();
             st.running = false;
@@ -525,7 +534,7 @@ pub async fn find_duplicates(
             st.error = None;
             Ok(res.clone())
         }
-        Err(msg) => {
+        Ok(Err(msg)) | Err(msg) => {
             let cancelled = msg.contains("cancelled");
             if cancelled {
                 ctl.phase.store(PHASE_CANCELLED, Ordering::Relaxed);
