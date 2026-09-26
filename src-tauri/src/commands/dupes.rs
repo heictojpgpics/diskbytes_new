@@ -71,14 +71,14 @@ const POOL_THREADS: usize = 4;
 /// Defender scanning neighbours) and leave the global pool free for
 /// CPU-bound work. Four also saturates NVMe queue depth (the full pass
 /// streams 1 MiB sequential reads) without tripping over itself on
-/// SATA. [`hash_pool::install`] scopes the parallel iterators.
+/// SATA. The parallel iterators are scoped with `ThreadPool::install`
+/// (see [`hash_pool`]).
 fn hash_pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
         let n = std::thread::available_parallelism()
-            .map_or(POOL_THREADS, |c| c.get())
-            .min(POOL_THREADS)
-            .max(1);
+            .map_or(POOL_THREADS, std::num::NonZero::get)
+            .clamp(1, POOL_THREADS);
         rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .thread_name(|i| format!("db-dupes-hash-{i}"))
@@ -845,8 +845,7 @@ fn finish_pipeline(
 
     // Core ranking (hardlink exclusion + wasted-space sort).
     let groups: Vec<DupeGroup> = dupes::rank(&hashed);
-    let (wasted_total, group_count) = dupes::totals(&groups);
-    let _ = group_count;
+    let (wasted_total, _) = dupes::totals(&groups);
     let views: Vec<DupeGroupView> = groups
         .into_iter()
         .take(200)
