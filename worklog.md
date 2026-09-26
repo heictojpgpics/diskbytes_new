@@ -1040,3 +1040,19 @@ Stage Summary:
 - Busy row: one memoized row, stable structure, monotonic bar — the strobe/lag is structurally gone
 - Transitions: single-layer settle-in, CSS-keyframe (no WAAPI gap), no inspector replay, snap-before-paint — DOM-probe clean at rAF granularity in light AND dark
 - Next: push → monitor all 4 workflows (first CI compile of the app-crate changes) → pull production screenshots → VLM-verify → report
+
+---
+Task ID: uiux-10 (session 5, cont.) — the CI convergence + production verification
+Agent: main (Super Z)
+Task: Close the CI loop on the session-5 push and verify the production Windows build
+
+Work Log:
+- CI round 1 (683517b): 3 workflows failed on the app crate with E0308 x2 — spawn_blocking(...).await yields a DOUBLE Result (outer JoinError, inner the pipeline's Ok/Err) and my terminal block matched only ONE layer (the session-4 code flattened with an early `?`, which also had a latent bug: a join failure early-returned BEFORE finished.store — leaking the ticker thread and leaving dupes_status.running stuck). Fixed with an or-pattern match: `Ok(Ok(res)) => {...}` / `Ok(Err(msg)) | Err(msg) => {...}` — both `msg: &String` bindings, one terminal block settles the app-lifetime record for every outcome. Sanity-compiled the exact structure with rustc -D warnings (zero warnings) before pushing
+- CI round 2 (5c74c5e): 2 clippy gates — manual_clamp (.min(POOL_THREADS).max(1) → .clamp(1, POOL_THREADS)) and redundant_closure_for_method_calls (|c| c.get() → std::num::NonZero::get) in hash_pool; also dropped a `let _ = group_count` for direct `_` destructuring and fixed an unresolvable `hash_pool::install` intra-doc link
+- ALL 4 WORKFLOWS GREEN on cd15732: CI (static gates + workspace tests + Windows dupes E2E + NSIS), Test Matrix (all platforms), macOS Build, UI Screenshots (production build + full tour)
+- PRODUCTION VERIFICATION (Windows runner): stderr trace — "[dupes] start gen=3 tree_nodes=198 → collected 148 candidates at 602µs → prefix pass done: 29 targets at 4.5ms (Defender warm this run; session-4's cold run took 17s) → full pass: 4 buckets / 9.44 GB → compute finished at 5.44s → await resolved 5.44s". The scan now resolves FASTER THAN THE TOUR'S FIRST 2.6s CAPTURE TICK — steps 24-28 all show the RESULT state (the mid-run busy row was production-captured in session 4; this run's warm Defender beat the tick). VLM audit of step-26: "6.79 GB could be reclaimed across 4 groups · 148 files considered", 3 visible group cards ("4 copies · 1.25 GB each / 3.75 GB wasted", "5 copies · 768 MB each", "8 copies · 5.00 MB each") with Keep/Stage/Collapse controls, no busy row, "no visual defects; text fully legible; no ghosting or blank regions"
+- The "hiberfil.sys" in a result group is a PLANTED test fixture (ui-screenshots.yml line 77, 768 MB inside the nested DiskBytesTest folder) — the protected filter correctly targets only real drive-root system files (parent_is_drive_root); not a leak
+
+Stage Summary:
+- Session 5 complete: 4-worker path-sorted hash pool (the 9 MB/s root cause), app-lifetime scan state (page switches can't orphan it), monotonic blink-free progress + isolated BusyRow, and the three-mechanism blink kill (WAAPI gap → CSS keyframes, inspector replay → class-driven transition, snap-after-paint → useLayoutEffect) — all DOM-probe-verified at rAF granularity in light AND dark, then production-verified on Windows CI
+- For the user's real disk: expect the prefix pass to no longer stampede (bounded pool + sorted order) and the MB/s counter to stay honest through phase boundaries; the busy row now survives any navigation
