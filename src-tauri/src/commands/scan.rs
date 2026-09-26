@@ -96,11 +96,24 @@ pub async fn start_scan(
     platform: State<'_, Arc<HostPlatform>>,
 ) -> Result<u64, String> {
     // Cancel any running scan (cooperative; its thread exits without
-    // swapping its tree — spec §4 "starting a new scan cancels the old").
+    // swapping its tree — spec §4 "starting a new scan cancels the old")
+    // AND any running duplicates pipeline: the tree it is hashing is
+    // about to be replaced, so the run's results would describe a
+    // dead world (the "stuck hashing a superseded tree" waste — a
+    // multi-GB hash burning I/O behind a fresh scan).
     {
         let scan = state.scan.lock();
         if let Some(old) = scan.as_ref() {
             old.cancel.store(true, Ordering::SeqCst);
+        }
+        state.dupes_cancel.fetch_add(1, Ordering::SeqCst);
+        // Drop the sticky dupes result now — the pipeline's own
+        // resolution clears `running` a beat later (cooperative cancel).
+        {
+            let mut st = state.dupes_status.lock();
+            st.result = None;
+            st.error = None;
+            st.progress = None;
         }
     }
 
@@ -433,12 +446,18 @@ pub async fn start_scan_turbo(
     let label = drive_root.clone();
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
 
-    // Cancel any standard scan in flight (same contract as start_scan).
+    // Cancel any standard scan in flight (same contract as start_scan,
+    // including the running-duplicates kill).
     {
         let scan = state.scan.lock();
         if let Some(old) = scan.as_ref() {
             old.cancel.store(true, Ordering::SeqCst);
         }
+        state.dupes_cancel.fetch_add(1, Ordering::SeqCst);
+        let mut st = state.dupes_status.lock();
+        st.result = None;
+        st.error = None;
+        st.progress = None;
     }
     // Turbo scans register a ScanHandle too: without one, cancel_scan
     // flipped a flag on a STALE handle while the MFT read ran

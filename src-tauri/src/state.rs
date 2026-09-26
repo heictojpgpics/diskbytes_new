@@ -10,6 +10,8 @@ use diskbytes_core::scan::node::Tree;
 use diskbytes_core::scan::scanner::Progress;
 use parking_lot::{Mutex, RwLock};
 
+use crate::commands::dupes::{DupesProgress, DupesResult};
+
 /// The live progress sink the scanner updates once per directory batch
 /// (spec §4); the 150 ms ticker and `get_status` read it.
 pub type ProgressSink = Arc<Mutex<Progress>>;
@@ -44,6 +46,30 @@ pub struct DoneRecord {
     pub error: Option<String>,
 }
 
+/// App-lifetime duplicates-scan state (the "page switch killed my
+/// scan" fix): the pipeline runs on a background task while THIS
+/// record lives in `AppState`, so any tab can re-attach at any time
+/// via `dupes_status` — the scan, its live progress and the sticky
+/// last result survive every view mount/unmount cycle. The old design
+/// kept all of it in the DuplicatesView's component state; leaving the
+/// tab orphaned a running multi-GB hash and showed "Start scan"
+/// again over a pipeline that was still hashing.
+#[derive(Debug, Clone, Default)]
+pub struct DupesStatus {
+    /// A pipeline is running (a fresh `find_duplicates` is rejected
+    /// while true; cancel + terminal resolution clear it).
+    pub running: bool,
+    /// The tree generation the run (or sticky result) belongs to.
+    pub generation: u64,
+    /// The last ticker snapshot (valid while running; the terminal
+    /// phase — `done` / `cancelled` — after resolution).
+    pub progress: Option<DupesProgress>,
+    /// The sticky last result (kept until a new run or tree change).
+    pub result: Option<DupesResult>,
+    /// Terminal error, if the last run failed (cancellations excluded).
+    pub error: Option<String>,
+}
+
 /// Shared application state managed by Tauri.
 pub struct AppState {
     /// The finished tree (`None` before the first scan completes).
@@ -73,6 +99,9 @@ pub struct AppState {
     /// `Arc` so the blocking pipeline can read it without borrowing
     /// the state.
     pub dupes_cancel: Arc<AtomicU64>,
+    /// App-lifetime duplicates state (see [`DupesStatus`]) — the
+    /// queryable half of the page-switch fix.
+    pub dupes_status: Arc<Mutex<DupesStatus>>,
 }
 
 impl AppState {
@@ -87,6 +116,7 @@ impl AppState {
             progress: Arc::new(Mutex::new(Progress::default())),
             last_done: Mutex::new(DoneRecord::default()),
             dupes_cancel: Arc::new(AtomicU64::new(0)),
+            dupes_status: Arc::new(Mutex::new(DupesStatus::default())),
         }
     }
 

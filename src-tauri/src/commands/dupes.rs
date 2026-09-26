@@ -1,14 +1,14 @@
 //! Duplicates commands (spec §10; doc 03 M8): the 3-pass flow
 //! (size-grouping, 64 KiB prefix SHA-256, full hashing for matches,
-//! both hash passes parallel on rayon). Hardlink exclusion via
-//! (volume-serial, file-index); cloud placeholders never open (R7.3);
-//! wasted-space ranking per the spec.
+//! both hash passes on a DEDICATED bounded pool). Hardlink exclusion
+//! via (volume-serial, file-index); cloud placeholders never open
+//! (R7.3); wasted-space ranking per the spec.
 //!
 //! Liveness contract (the "Scanning… forever" fix): a real disk can
 //! hold hundreds of GB in same-size buckets, so the command reports
 //! honest progress on `dupes-progress` (phase, files, bytes, elapsed
-//! — a 200 ms ticker thread samples atomics the rayon workers bump)
-//! and accepts cancellation (`cancel_duplicates` bumps a generation
+//! — a 200 ms ticker thread samples atomics the workers bump) and
+//! accepts cancellation (`cancel_duplicates` bumps a generation
 //! counter; the run latches it at start and every per-file check
 //! compares against the latch, so a late cancel can never poison a
 //! newer run).
@@ -18,10 +18,18 @@
 //! screens same-prefix false positives (identical headers, zero-padded
 //! formats) BEFORE the full read; pass 3 full-hashes only survivors.
 //! Windows opens every hash read with `FILE_FLAG_SEQUENTIAL_SCAN`.
+//! All hash work runs on a 4-worker pool over PATH-SORTED files (the
+//! session-5 speed fix — see [`hash_pool`]).
+//!
+//! State contract (the "page switch killed my scan" fix): the run's
+//! live status and sticky result live in `AppState.dupes_status`
+//! (`dupes_status` command) so the DuplicatesView can re-attach after
+//! any tab switch; a UI-unmount can no longer orphan a running
+//! multi-GB hash.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use diskbytes_core::dupes::{self, DupeGroup, HashedFile};
@@ -48,6 +56,36 @@ const TICK_MS: u64 = 200;
 /// Progress `elapsed_ms` cap (10 minutes) — `as_millis` is u128; real
 /// scans stay far below this and the UI re-computes from its own clock.
 const ELAPSED_CAP_MS: u128 = 600_000_000;
+/// Hash-pool worker count (see [`hash_pool`]).
+const POOL_THREADS: usize = 4;
+
+/// The dedicated, bounded hash pool (session-5 speed fix).
+///
+/// The passes used to run on the GLOBAL rayon pool — one thread per
+/// logical CPU (16–32 on a modern machine) — which is exactly wrong
+/// for disk work: dozens of concurrently-opened files in work-stolen
+/// (effectively random) order thrash the queue with seeks and stampede
+/// Windows Defender's per-open scan, the two compounding causes of the
+/// user-measured "9 MB/s". Four workers reading PATH-SORTED files
+/// keep streams near-adjacent on disk (short seeks, warm cache lines,
+/// Defender scanning neighbours) and leave the global pool free for
+/// CPU-bound work. Four also saturates NVMe queue depth (the full pass
+/// streams 1 MiB sequential reads) without tripping over itself on
+/// SATA. [`hash_pool::install`] scopes the parallel iterators.
+fn hash_pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism()
+            .map_or(POOL_THREADS, |c| c.get())
+            .min(POOL_THREADS)
+            .max(1);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .thread_name(|i| format!("db-dupes-hash-{i}"))
+            .build()
+            .expect("dupes hash pool")
+    })
+}
 
 /// A pass-3 bucket: `((size, prefix digest), candidate indices)` —
 /// prefix survivors with ≥ 2 members heading into the full hash. (A
@@ -95,10 +133,18 @@ pub struct DupesResult {
 
 /// Live progress snapshot for the `dupes-progress` event (camelCase
 /// DTO — the UI's busy row renders phase, files, bytes, elapsed).
+///
+/// The `*_all` counters and `overall` are the session-5 blink fix:
+/// per-phase counters reset at every phase boundary (the old bar
+/// snapped 100%→0% four times per scan and the MB/s counter froze);
+/// `files_done_all` / `bytes_done_all` accumulate across the WHOLE
+/// run (monotonic — rate + ETA stay honest through transitions), and
+/// `overall` is a weighted global fraction that never moves backwards
+/// (the bar animates one smooth ramp).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DupesProgress {
-    /// "collect" | "prefix" | "screen" | "full" | "done".
+    /// "collect" | "prefix" | "screen" | "full" | "done" | "cancelled".
     pub phase: String,
     /// Files hashed so far in the current phase.
     pub files_done: u64,
@@ -112,6 +158,13 @@ pub struct DupesProgress {
     /// Milliseconds since the scan started (capped, see
     /// [`ELAPSED_CAP_MS`]).
     pub elapsed_ms: u64,
+    /// Files finished across ALL phases so far (never resets).
+    pub files_done_all: u64,
+    /// Bytes read across ALL phases so far (never resets — the rate
+    /// source).
+    pub bytes_done_all: u64,
+    /// Weighted global fraction [0, 1] — the bar source (monotonic).
+    pub overall: f32,
 }
 
 /// Phase ids for the atomic phase slot.
@@ -120,8 +173,22 @@ const PHASE_PREFIX: u8 = 1;
 const PHASE_SCREEN: u8 = 2;
 const PHASE_FULL: u8 = 3;
 const PHASE_DONE: u8 = 4;
+const PHASE_CANCELLED: u8 = 5;
 
-/// Shared run control: atomics the rayon workers bump (cheap — no
+/// Global-progress weights: [start, span] per phase on a 0..1 axis.
+/// Prefix-heavy by design — it touches every same-size candidate and
+/// dominates real-disk wall time; the full pass is bounded by actual
+/// duplicate bytes. Sums to exactly 1.0 so `done` lands on 100%.
+const PHASE_WEIGHTS: [(f32, f32); 6] = [
+    (0.0, 0.02),  // collect
+    (0.02, 0.45), // prefix
+    (0.47, 0.13), // screen
+    (0.60, 0.40), // full
+    (1.0, 0.0),   // done
+    (0.0, 0.0),   // cancelled (bar resets with the view)
+];
+
+/// Shared run control: atomics the pool workers bump (cheap — no
 /// mutex on the hot path), the cancel latch, and the optional event
 /// sink. `app: None` in tests (no Tauri runtime needed).
 struct DupesCtl {
@@ -130,6 +197,10 @@ struct DupesCtl {
     files_total: AtomicU64,
     bytes_done: AtomicU64,
     bytes_total: AtomicU64,
+    /// Cumulative across ALL phases (never reset — the rate + overall
+    /// sources; see [`DupesProgress`]).
+    files_all: AtomicU64,
+    bytes_all: AtomicU64,
     phase: AtomicU8,
     /// Cancel generation shared with `AppState` — `cancel_duplicates`
     /// bumps it; this run latched the value it saw at start.
@@ -140,9 +211,9 @@ struct DupesCtl {
 }
 
 impl DupesCtl {
-    /// A quiet control (no events) — the Windows E2E test harness (the
-    /// sole consumer); gated so non-Windows test builds never see it.
-    #[cfg(all(test, windows))]
+    /// A quiet control (no events) — the Windows E2E test harness AND
+    /// the pure snapshot tests (no Tauri runtime needed).
+    #[cfg(test)]
     fn quiet(gen: Arc<AtomicU64>) -> Self {
         Self::with_app(None, gen)
     }
@@ -160,6 +231,8 @@ impl DupesCtl {
             files_total: AtomicU64::new(0),
             bytes_done: AtomicU64::new(0),
             bytes_total: AtomicU64::new(0),
+            files_all: AtomicU64::new(0),
+            bytes_all: AtomicU64::new(0),
             phase: AtomicU8::new(PHASE_COLLECT),
             cancel_gen: gen,
             latch,
@@ -172,35 +245,63 @@ impl DupesCtl {
         self.cancel_gen.load(Ordering::Relaxed) != self.latch
     }
 
+    /// Enter a phase: per-phase counters RESET (they describe the
+    /// upcoming phase), cumulative counters never do. Totals are
+    /// written BEFORE the phase id (the ticker reads phase first, so
+    /// a boundary-straddling tick can only show the NEW phase with
+    /// fresh-zero counters for one 200 ms beat — never the old phase
+    /// with the new totals).
     fn set_phase(&self, phase: u8, files_total: u64, bytes_total: u64) {
-        self.phase.store(phase, Ordering::Relaxed);
-        self.files_done.store(0, Ordering::Relaxed);
-        self.bytes_done.store(0, Ordering::Relaxed);
         self.files_total.store(files_total, Ordering::Relaxed);
         self.bytes_total.store(bytes_total, Ordering::Relaxed);
+        self.files_done.store(0, Ordering::Relaxed);
+        self.bytes_done.store(0, Ordering::Relaxed);
+        self.phase.store(phase, Ordering::Relaxed);
     }
 
-    /// One finished hash target: bump files, and the bytes it cost.
+    /// One finished hash target: bump files, and the bytes it cost —
+    /// both the per-phase and the cumulative counters.
     fn file_done(&self, bytes: u64) {
         self.files_done.fetch_add(1, Ordering::Relaxed);
         self.bytes_done.fetch_add(bytes, Ordering::Relaxed);
+        self.files_all.fetch_add(1, Ordering::Relaxed);
+        self.bytes_all.fetch_add(bytes, Ordering::Relaxed);
     }
 
     fn snapshot(&self) -> DupesProgress {
-        let phase = match self.phase.load(Ordering::Relaxed) {
+        let phase = self.phase.load(Ordering::Relaxed);
+        let phase_str = match phase {
             PHASE_PREFIX => "prefix",
             PHASE_SCREEN => "screen",
             PHASE_FULL => "full",
             PHASE_DONE => "done",
+            PHASE_CANCELLED => "cancelled",
             _ => "collect",
         };
+        let files_done = self.files_done.load(Ordering::Relaxed);
+        let files_total = self.files_total.load(Ordering::Relaxed);
+        let bytes_done = self.bytes_done.load(Ordering::Relaxed);
+        let bytes_total = self.bytes_total.load(Ordering::Relaxed);
+        let (start, span) = PHASE_WEIGHTS[phase.min(5) as usize];
+        let frac = if phase == PHASE_DONE {
+            1.0
+        } else if bytes_total > 0 {
+            (bytes_done as f64 / bytes_total as f64).min(1.0) as f32
+        } else if files_total > 0 {
+            (files_done as f64 / files_total as f64).min(1.0) as f32
+        } else {
+            0.0
+        };
         DupesProgress {
-            phase: phase.to_string(),
-            files_done: self.files_done.load(Ordering::Relaxed),
-            files_total: self.files_total.load(Ordering::Relaxed),
-            bytes_done: self.bytes_done.load(Ordering::Relaxed),
-            bytes_total: self.bytes_total.load(Ordering::Relaxed),
+            phase: phase_str.to_string(),
+            files_done,
+            files_total,
+            bytes_done,
+            bytes_total,
             elapsed_ms: self.started.elapsed().as_millis().min(ELAPSED_CAP_MS) as u64,
+            files_done_all: self.files_all.load(Ordering::Relaxed),
+            bytes_done_all: self.bytes_all.load(Ordering::Relaxed),
+            overall: (start + span * frac).clamp(0.0, 1.0),
         }
     }
 
@@ -330,10 +431,13 @@ fn hardlink_identity(_path: &std::path::Path) -> Option<(u64, u64)> {
 }
 
 /// Find duplicates in the current tree (spec §10 3-pass) with live
-/// progress + cooperative cancellation.
+/// progress, cooperative cancellation, and an APP-LIFETIME state
+/// record (page switches can no longer orphan the run: the UI
+/// re-attaches via [`dupes_status`]).
 ///
 /// # Errors
-/// String error when no scan exists, the generation is stale, the
+/// String error when no scan exists, the generation is stale, a run
+/// is already in flight ("already running" — the UI no-ops), the
 /// pipeline was cancelled, or the blocking thread failed.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // State extraction is the tauri command contract
@@ -356,18 +460,30 @@ pub async fn find_duplicates(
         }
         Arc::clone(tree)
     };
-    // One ctl shared by the compute AND the ticker (the same atomics —
-    // the events mirror exactly what the workers bumped). The latch:
-    // this run is cancelled iff the shared counter moves off the value
-    // it held at start; a cancel pressed before this line counts for
-    // THIS run (the UI only cancels while a run is busy).
+    // The run-state gate: mark running BEFORE spawning so a same-tick
+    // second click (or a stale view's invoke) is rejected cleanly
+    // instead of stacking a second pipeline. The sticky result dies
+    // with the new run — a fresh scan means a fresh page.
+    {
+        let mut st = state.dupes_status.lock();
+        if st.running {
+            return Err("already running".into());
+        }
+        st.running = true;
+        st.generation = generation;
+        st.progress = None;
+        st.result = None;
+        st.error = None;
+    }
     eprintln!("[dupes] start gen={generation} tree_nodes={}", tree.len());
     let t_start = Instant::now();
     let ctl = Arc::new(DupesCtl::live(app, Arc::clone(&state.dupes_cancel)));
-    // Ticker: samples the atomics every TICK_MS until the compute
-    // resolves. Detached — the last tick may land ≤200 ms after the
-    // result; the UI ignores events once not busy.
+    let status_out = Arc::clone(&state.dupes_status);
+    // The ticker also mirrors every snapshot into the app-lifetime
+    // status record — `dupes_status` queries never observe a stale
+    // phase, and a mid-scan page switch re-attaches to LIVE counters.
     let ticker_ctl = Arc::clone(&ctl);
+    let ticker_status = Arc::clone(&state.dupes_status);
     let finished = Arc::new(AtomicBool::new(false));
     let finished_t = Arc::clone(&finished);
     std::thread::spawn(move || {
@@ -376,7 +492,12 @@ pub async fn find_duplicates(
             if finished_t.load(Ordering::Relaxed) {
                 break;
             }
+            let snap = ticker_ctl.snapshot();
             ticker_ctl.tick();
+            let mut st = ticker_status.lock();
+            if st.running {
+                st.progress = Some(snap);
+            }
         }
     });
     let compute_ctl = Arc::clone(&ctl);
@@ -388,13 +509,68 @@ pub async fn find_duplicates(
         out
     })
     .await
-    .map_err(|e| format!("dupes thread failed: {e}"))?;
+    .map_err(|e| format!("dupes thread failed: {e}"));
     eprintln!("[dupes] await resolved at {:?}", t_start.elapsed());
     finished.store(true, Ordering::Relaxed);
-    // Terminal event: the UI's busy row settles on "done" (or the
-    // invoke's Err lands first — either way the window closes).
+    // Terminal resolution: settle the app-lifetime record + the event
+    // stream in ONE place (cancel is a quiet reset — no error banner;
+    // a failure records the message for the re-attached view).
+    let terminal = match &result {
+        Ok(res) => {
+            ctl.set_phase(PHASE_DONE, 0, 0);
+            let mut st = status_out.lock();
+            st.running = false;
+            st.progress = Some(ctl.snapshot());
+            st.result = Some(res.clone());
+            st.error = None;
+            Ok(res.clone())
+        }
+        Err(msg) => {
+            let cancelled = msg.contains("cancelled");
+            if cancelled {
+                ctl.phase.store(PHASE_CANCELLED, Ordering::Relaxed);
+            }
+            let mut st = status_out.lock();
+            st.running = false;
+            st.progress = Some(ctl.snapshot());
+            if !cancelled {
+                st.error = Some(msg.clone());
+            }
+            Err(msg.clone())
+        }
+    };
+    // Terminal event: the busy row settles on "done" (or the invoke's
+    // Err lands first — either way the window closes).
     ctl.tick();
-    result
+    terminal
+}
+
+/// Read the app-lifetime duplicates status (the page-switch fix's
+/// query half): a freshly-mounted DuplicatesView adopts the running
+/// pipeline's live progress or the sticky last result instead of
+/// showing "Start scan" over a scan that is still hashing.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // State extraction is the tauri command contract
+pub fn dupes_status(state: State<'_, AppState>) -> DupesStatusView {
+    let st = state.dupes_status.lock();
+    DupesStatusView {
+        running: st.running,
+        generation: st.generation,
+        progress: st.progress.clone(),
+        result: st.result.clone(),
+        error: st.error.clone(),
+    }
+}
+
+/// Serializable mirror of [`crate::state::DupesStatus`] (camelCase).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DupesStatusView {
+    pub running: bool,
+    pub generation: u64,
+    pub progress: Option<DupesProgress>,
+    pub result: Option<DupesResult>,
+    pub error: Option<String>,
 }
 
 /// Cancel the running duplicates scan. Idempotent; safe when nothing
@@ -409,9 +585,10 @@ pub fn cancel_duplicates(state: State<'_, AppState>) -> u64 {
 /// The full pipeline (spec §10 3-pass + tier-2 screen): collect →
 /// size groups → parallel prefix hashes → parallel mid-file screens →
 /// parallel full hashes → hardlink exclusion → wasted-space ranking.
-/// Both hash passes run in PARALLEL on rayon — the passes are pure
-/// I/O, and an NVMe drive serves 4+ concurrent reads at full queue
-/// depth; single-threaded hashing left that bandwidth on the table.
+/// All hash passes run on the bounded [`hash_pool`] over PATH-SORTED
+/// work — disk-locality ordering (short seeks, warm caches, Defender
+/// scanning neighbours) instead of the global pool's work-stolen
+/// random order; see [`hash_pool`] for the throughput story.
 ///
 /// # Errors
 /// `Err("cancelled")` when the user cancelled mid-pipeline.
@@ -437,6 +614,10 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
             });
         }
     });
+    // Disk-locality order for every subsequent pass: the tree walk
+    // order is traversal-dependent, not on-disk order — one sort here
+    // and each pass's work list starts near where the last one seeks.
+    candidates.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     let total_files = candidates.len() as u64;
     eprintln!(
         "[dupes] collected {total_files} candidates at {:?}",
@@ -466,17 +647,19 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
         .map(|&i| candidates[i].size.min(PREFIX))
         .sum();
     ctl.set_phase(PHASE_PREFIX, prefix_targets.len() as u64, prefix_bytes);
-    let digests: Vec<Option<[u8; 32]>> = prefix_targets
-        .par_iter()
-        .map(|&i| {
-            let read = candidates[i].size.min(PREFIX);
-            let d = hash_prefix(std::path::Path::new(&candidates[i].path));
-            // Counted even when unreadable — the attempt is the work
-            // the user waits on.
-            ctl.file_done(read);
-            d
-        })
-        .collect();
+    let digests: Vec<Option<[u8; 32]>> = hash_pool().install(|| {
+        prefix_targets
+            .par_iter()
+            .map(|&i| {
+                let read = candidates[i].size.min(PREFIX);
+                let d = hash_prefix(std::path::Path::new(&candidates[i].path));
+                // Counted even when unreadable — the attempt is the work
+                // the user waits on.
+                ctl.file_done(read);
+                d
+            })
+            .collect()
+    });
     if ctl.cancelled() {
         return Err("cancelled".into());
     }
@@ -517,17 +700,19 @@ fn compute_dupes(tree: &Tree, ctl: &DupesCtl) -> Result<DupesResult, String> {
     }
     let mid_bytes: u64 = mid_candidates.len() as u64 * 2 * SAMPLE;
     ctl.set_phase(PHASE_SCREEN, mid_candidates.len() as u64, mid_bytes);
-    let mids: Vec<Option<[u8; 32]>> = mid_candidates
-        .par_iter()
-        .map(|&i| {
-            let d = hash_middle(
-                std::path::Path::new(&candidates[i].path),
-                candidates[i].size,
-            );
-            ctl.file_done(2 * SAMPLE);
-            d
-        })
-        .collect();
+    let mids: Vec<Option<[u8; 32]>> = hash_pool().install(|| {
+        mid_candidates
+            .par_iter()
+            .map(|&i| {
+                let d = hash_middle(
+                    std::path::Path::new(&candidates[i].path),
+                    candidates[i].size,
+                );
+                ctl.file_done(2 * SAMPLE);
+                d
+            })
+            .collect()
+    });
     if ctl.cancelled() {
         return Err("cancelled".into());
     }
@@ -598,38 +783,53 @@ fn finish_pipeline(
         survivors.len(),
         full_bytes
     );
-    let hashed: Vec<HashedFile> = survivors
-        .par_iter()
-        .flat_map(|((size, prefix_digest), group)| {
-            group
-                .iter()
-                .filter_map(|&i| {
-                    if ctl.cancelled() {
-                        return None;
-                    }
-                    let c = &candidates[i];
-                    let (sha256, read) = if *size <= PREFIX {
-                        (*prefix_digest, 0)
-                    } else {
-                        match hash_full(std::path::Path::new(&c.path)) {
-                            Some(d) => (d, *size),
-                            None => return None,
+    // Path-order the full pass too: buckets sorted by first member
+    // path, members sorted within the bucket — four streams walk the
+    // disk in the same forward direction instead of bouncing between
+    // distant extents.
+    let mut ordered: Vec<Bucket> = survivors.to_vec();
+    for ((_, _), g) in &mut ordered {
+        g.sort_unstable_by(|&a, &b| candidates[a].path.cmp(&candidates[b].path));
+    }
+    ordered.sort_unstable_by(|a, b| {
+        candidates[*a.1.first().unwrap_or(&0)]
+            .path
+            .cmp(&candidates[*b.1.first().unwrap_or(&0)].path)
+    });
+    let hashed: Vec<HashedFile> = hash_pool().install(|| {
+        ordered
+            .par_iter()
+            .flat_map(|((size, prefix_digest), group)| {
+                group
+                    .iter()
+                    .filter_map(|&i| {
+                        if ctl.cancelled() {
+                            return None;
                         }
-                    };
-                    ctl.file_done(read);
-                    let (vs, fi) = hardlink_identity(std::path::Path::new(&c.path))
-                        .unwrap_or((u64::MAX, u64::from(c.id)));
-                    Some(HashedFile {
-                        path: c.path.clone(),
-                        size: *size,
-                        volume_serial: vs,
-                        file_index: fi,
-                        sha256,
+                        let c = &candidates[i];
+                        let (sha256, read) = if *size <= PREFIX {
+                            (*prefix_digest, 0)
+                        } else {
+                            match hash_full(std::path::Path::new(&c.path)) {
+                                Some(d) => (d, *size),
+                                None => return None,
+                            }
+                        };
+                        ctl.file_done(read);
+                        let (vs, fi) = hardlink_identity(std::path::Path::new(&c.path))
+                            .unwrap_or((u64::MAX, u64::from(c.id)));
+                        Some(HashedFile {
+                            path: c.path.clone(),
+                            size: *size,
+                            volume_serial: vs,
+                            file_index: fi,
+                            sha256,
+                        })
                     })
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    });
     if ctl.cancelled() {
         return Err("cancelled".into());
     }
@@ -677,7 +877,8 @@ mod tests {
 
     #[test]
     fn phase_dto_is_camelcased() {
-        // The UI reads phase/filesDone/bytesDone — serde must camelCase.
+        // The UI reads phase/filesDone/bytesDone + the session-5
+        // cumulative fields — serde must camelCase all of them.
         let p = DupesProgress {
             phase: "prefix".into(),
             files_done: 1,
@@ -685,11 +886,91 @@ mod tests {
             bytes_done: 3,
             bytes_total: 4,
             elapsed_ms: 5,
+            files_done_all: 6,
+            bytes_done_all: 7,
+            overall: 0.5,
         };
         let s = serde_json::to_string(&p).expect("serialize");
         assert!(s.contains("\"filesDone\""), "camelCase DTO: {s}");
         assert!(s.contains("\"bytesDone\""), "camelCase DTO: {s}");
         assert!(s.contains("\"elapsedMs\""), "camelCase DTO: {s}");
+        assert!(s.contains("\"filesDoneAll\""), "camelCase DTO: {s}");
+        assert!(s.contains("\"bytesDoneAll\""), "camelCase DTO: {s}");
+        assert!(s.contains("\"overall\""), "camelCase DTO: {s}");
+    }
+
+    #[test]
+    fn phase_weights_partition_the_axis() {
+        // The bar must land on exactly 100% at `done` and never exceed 1.
+        // The first FIVE entries form the sequential ramp; the cancelled
+        // entry (index 5) is a reset marker OUTSIDE the ramp — a cancel
+        // clears the bar with the view, it does not continue the ramp
+        // (contiguity through it is meaningless and the ramp must still
+        // sum to exactly 1.0 on its own).
+        let mut acc = 0.0f32;
+        for (start, span) in PHASE_WEIGHTS.iter().take(5) {
+            assert!((0.0..=1.0).contains(start), "weight start in range");
+            assert!(*span >= 0.0, "weight span non-negative");
+            assert!((start - acc).abs() < 1e-6, "weights are contiguous");
+            acc = start + span;
+        }
+        assert!((acc - 1.0).abs() < 1e-6, "ramp sums to 1.0 (got {acc})");
+        assert_eq!(
+            PHASE_WEIGHTS[usize::from(PHASE_CANCELLED)],
+            (0.0, 0.0),
+            "cancelled resets, it does not ramp"
+        );
+    }
+
+    #[test]
+    fn overall_is_monotonic_across_a_full_run() {
+        // The blink fix's core promise: no phase boundary can move the
+        // global bar backwards (the old per-phase bar snapped to 0%
+        // four times per scan and read as blinking/lagging).
+        let ctl = DupesCtl::quiet(Arc::new(AtomicU64::new(0)));
+        let mut last = 0.0f32;
+        // (no `mut`: the closure captures `ctl` by shared reference —
+        // `unused_mut` is a hard error under CI's `-D warnings`.)
+        let check = |last: &mut f32| {
+            let s = ctl.snapshot();
+            assert!(
+                s.overall >= *last - 1e-6,
+                "overall regressed: {} -> {} ({})",
+                *last,
+                s.overall,
+                s.phase
+            );
+            *last = s.overall;
+        };
+        check(&mut last); // collect (empty)
+        ctl.set_phase(PHASE_PREFIX, 100, 100 * 1024);
+        for i in 1..=100u64 {
+            ctl.file_done(1024);
+            if i % 25 == 0 {
+                check(&mut last);
+            }
+        }
+        ctl.set_phase(PHASE_SCREEN, 10, 10 * 2 * SAMPLE);
+        check(&mut last); // boundary: 47% must be >= 47%
+        for _ in 0..10 {
+            ctl.file_done(2 * SAMPLE);
+        }
+        check(&mut last);
+        ctl.set_phase(PHASE_FULL, 4, 4 * 1024 * 1024 * 1024);
+        check(&mut last);
+        for i in 1..=4u64 {
+            ctl.file_done(1024 * 1024 * 1024);
+            if i % 2 == 0 {
+                check(&mut last);
+            }
+        }
+        ctl.set_phase(PHASE_DONE, 0, 0);
+        check(&mut last);
+        assert!((ctl.snapshot().overall - 1.0).abs() < 1e-6, "done = 100%");
+        // Cumulative counters survived every boundary (rate/ETA source).
+        let s = ctl.snapshot();
+        assert_eq!(s.files_done_all, 114, "cumulative files");
+        assert!(s.bytes_done_all > 0, "cumulative bytes");
     }
 
     #[cfg(windows)]

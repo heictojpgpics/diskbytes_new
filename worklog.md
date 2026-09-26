@@ -998,3 +998,45 @@ Work Log:
 
 Stage Summary:
 - Session 4 complete: dupes liveness+cancel+speed with production-proof; ghost-free veil swaps; mind map fills the canvas; the user's exact UAC shield; the tauri #13419 test-binary fix (a repo-level win beyond this feature); CI fully green with the real duplicates result captured
+
+---
+Task ID: uiux-10 (session 5)
+Agent: main (Super Z)
+Task: User report: dupes scan ~9 MB/s on real disks (can't finish); scan dies on page switch ("start scan again"); busy-row blinking (file names flicker, bar lagging, "collecting artifacts" strobe); residual blink/zoom/double-render on every page & mode switch. All four, at the root.
+
+Work Log:
+- DIAGNOSES (code-confirmed before any fix):
+  * 9 MB/s: the hash passes ran on the GLOBAL rayon pool (1 thread/logical CPU — 16–32 concurrent random-order file opens) — seek thrash + Defender per-open stampede. CI showed 1918 MB/s only because the runner's sparse zero-filled files skip real IO.
+  * State loss: ALL dupes state lived in DuplicatesView component state — unmount orphans a running multi-GB pipeline; remount offers "Start scan" over a still-hashing run.
+  * Busy-row blink: per-phase totals reset the bar 100%→0 four times per scan; the counts span mount/unmounted at every phase boundary; every 200 ms tick re-rendered the whole view (200 group cards) — the "lagging bar".
+  * Switch artifacts: THREE stacked mechanisms, each DOM-probed: (1) framer drove the settle-in fade via WAAPI while the inline style stayed `opacity: 0`; its cleanup is ASYNC — one painted frame after the ramp completes, anims=0/inline="0"/computed=0 (a blank background flash ~150 ms after EVERY switch); (2) `.db-inspector-col`'s keyframe entrance replayed on every tab-return mount, and the tab-snap suppression made it WORSE — lifting `animation: none` at 280 ms re-applied the animation property, RESTARTING the entrance (probed: opacity 1→0 + translateX(16px) at t=557) — a literal "double render"; (3) the snap class landed in useEffect (after paint) — one frame of partially-open grid track.
+- RUST ENGINE (commands/dupes.rs, app crate):
+  * DEDICATED 4-worker hash pool (`hash_pool()`, OnceLock rayon::ThreadPoolBuilder, named threads) — `install()` scopes every par_iter; 4 saturates NVMe queue depth without SATA self-thrash, leaves the global pool for CPU work
+  * PATH-SORTED work: candidates sorted once (disk-locality order — short seeks, warm cache lines, Defender scanning neighbors); the full pass sorts buckets by first-member path and members within buckets — four streams walk the disk forward
+  * MONOTONIC progress DTO: `files_done_all`/`bytes_done_all` (cumulative across phases — the honest rate/ETA source) + `overall` (PHASE_WEIGHTS: collect 0.02 / prefix 0.45 / screen 0.13 / full 0.40 — one smooth ramp, never backwards)
+  * APP-LIFETIME STATE: `AppState.dupes_status` (Arc<Mutex<DupesStatus>>) carries running/generation/progress/sticky-result/error; the ticker mirrors every snapshot into it; `dupes_status` command serves a remounted view; `find_duplicates` gates re-entry ("already running") and settles the record + terminal event in ONE place (cancel = quiet reset)
+  * `start_scan`/`start_scan_turbo` cancel any in-flight dupes run (the tree it hashes is about to be replaced) and drop the sticky result
+  * New tests: phase-weights partition (ramp-only; cancelled is a reset marker), monotonic-overall across a full simulated run (114 cumulative files), DTO v2 camelCase. Windows E2E suite unchanged (CI-green). Pure control logic sanity-compiled + tested with plain rustc (3/3, zero warnings) — the app crate compiles only on CI
+- FRONTEND:
+  * `src/state/dupes.ts` (NEW): zustand module store — ONE persistent `dupes-progress` listener attached at boot (bootstrapDupes in App boot effect), ~9 Hz throttled store writes (phase/terminal events flush immediately), start/refresh/cancel/invalidate actions; `refresh()` adopts the backend's live status on remount — THE page-switch fix
+  * DuplicatesView rewired onto the store: BusyRow is an isolated memo component subscribing to the progress slice ONLY (ticks repaint one row, not the group list); the row's structure is fully stable while busy (no span mount/unmount strobe); the bar reads `overall` (monotonic) with linear pacing; rate derives from `bytesDoneAll`; cancel = quiet reset; tree-change invalidation via generation check
+  * TRANSITIONS — the three-blink kill:
+    - TabSwap/StageSwap are now PLAIN DIVS + CSS keyframe `db-settle-in` (130 ms easeOut opacity-only, compositor-driven) — a CSS animation reverts to the underlying value (1) in the SAME style recalc the instant it ends, so the WAAPI cleanup gap cannot exist; framer is off the swap path entirely (motion.ts SWAP_ENTER retired with the rationale in a comment)
+    - The inspector entrance is a CLASS-DRIVEN TRANSITION (opacity/transform flip via `has-inspector`): the polish plays ONLY on the user's within-Explore toggle (class lands on a live element); a fresh mount WITH the class resolves at final style in its first recalc — no slide-in on tab returns, and nothing to suppress (the `animation: none` restart trap is gone by construction)
+    - The tab-snap effect moved to useLayoutEffect — the snap reaches the DOM BEFORE the paint of the tab change (no partially-open first frame)
+  * Mock parity: find_duplicates emits the DTO-v2 cadence with the same phase weights (monotonic overall), app-lifetime dupesRunning/dupesLastProgress/dupesResult + `dupes_status` command mirror; re-entrant rejection
+- VERIFIED LIVE (demo, agent-browser DOM probes at rAF granularity):
+  * Page-switch persistence: scan started → Explore at +250 ms → back at +500 ms → busy row ALIVE at +640 ms ("Verifying full contents · 949/1,420 files · 25.5/38.2 GB · Cancel"), no reset; result round-trips with 3 groups + "Scan Again"
+  * Monotonic bar: 8 width samples 8.5%→70.8%, ZERO regressions (old bar snapped 4×/scan)
+  * Cancel: quiet reset, no error banner
+  * Tab switch: opacity ramp 0→1 completing at ~140 ms, HOLDS 1 (no dip at t≈150 — the WAAPI gap is gone), layers=1 at every frame; mode switch: same; rapid A→B→A: layers=1 always, converges to full opacity by ~343 ms, no stuck wrappers
+  * Inspector return to Explore: opacity 1, zero running animations through the whole 280 ms+ window (the replay is dead); within-Explore toggle still animates both directions over the spring
+  * Dark mode: same clean ramp, no dip; VLM audits of dark busy row ("Screening same-prefix files · 857/1,420 · 23.0/38.2 GB", bar ~60% — no defects) and dark results ("3.36 GB across 3 groups", 3 cards, no defects)
+- GATES: tsc 0, vitest 54/54, vite build OK, core fmt+clippy clean, 197 core tests; app-crate diff re-reviewed line-by-line against the core API signatures (rank/totals/HashedFile/DupeGroup all match); fixed pre-push: duplicate PHASE_* const block (edit landed twice), phase-weights test asserting contiguity through the cancelled reset-marker (would have failed CI), `unused_mut` on the monotonic test's closure (hard error under -D warnings)
+
+Stage Summary:
+- Speed: bounded 4-worker pool + path-sorted IO replaces the global-pool stampede (the 9 MB/s root cause); rate/ETA/overall all monotonic now
+- State: scan lifecycle is app-lifetime (Rust status record + boot-attached store listener) — page switches CANNOT orphan it; remount re-attaches to live counters
+- Busy row: one memoized row, stable structure, monotonic bar — the strobe/lag is structurally gone
+- Transitions: single-layer settle-in, CSS-keyframe (no WAAPI gap), no inspector replay, snap-before-paint — DOM-probe clean at rAF granularity in light AND dark
+- Next: push → monitor all 4 workflows (first CI compile of the app-crate changes) → pull production screenshots → VLM-verify → report

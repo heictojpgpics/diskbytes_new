@@ -251,34 +251,23 @@
   position: relative;
   background: var(--background);
 }
-/* The keyed swap wrapper (ExploreView, VEIL swap): the ENTERING mode
- * flows normally as a SOLID sheet (the veil — `background:
- * var(--background)`, same as the stage) fading in + settling 5px over
- * the still-opaque old one; any EXITING mode (data-exiting, from
- * useIsPresent — immune to framer's DOM reordering on interrupted
- * swaps) is lifted out of the scroll flow by CSS alone. The old view's
- * exit NEVER fades — no double exposure (the "shadow / page-in-page"
- * ghost), and the entering canvas's mount→fetch→paint window hides
- * under the veil. No JS measurement, no popLayout injection — a slow
- * or stuck exit can never reflow the stage. All wrappers positioned →
- * paint order = DOM order. */
+/* The keyed swap wrapper (ExploreView, settle-in swap — see
+ * .db-tab-swap in shell.css): the entering mode fills the stage as a
+ * SOLID sheet (`background: var(--background)`, same as the stage)
+ * fading 0→1 while the old mode unmounts INSTANTLY. One content layer
+ * on screen at any moment — no double exposure, no zoom; the stage
+ * geometry is stable across mode switches, so the entering canvas
+ * mounts at its final size and the ~1-IPC fetch window passes at
+ * opacity ≈ 0. CSS keyframe `db-settle-in` (defined in shell.css,
+ * shared with the tab level) — no framer/WAAPI cleanup gap. */
 .db-stage-swap {
   height: 100%;
   min-height: 100%;
   display: flex;
   flex-direction: column;
   position: relative;
-  /* The veil sheet (see .db-tab-swap). */
   background: var(--background);
-  /* Live sheet always above the lingering exit (see .db-tab-swap). */
-  z-index: 1;
-}
-.db-stage-swap[data-exiting] {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  /* Dead the instant presence flips (see .db-tab-swap). */
-  pointer-events: none;
+  animation: db-settle-in 130ms ease-out;
 }
 
 /* Folder-card entrance: a capped stagger (first ~12 cards) with

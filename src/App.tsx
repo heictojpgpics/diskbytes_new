@@ -6,8 +6,8 @@
  * and the license dialog. Also mounts the DISKBYTES_TOUR driver (dev
  * hook §15 — CI screenshot tours).
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { AnimatePresence, MotionConfig, motion, useIsPresent } from "framer-motion";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 
 import { TopBar } from "./shell/TopBar";
 import { Sidebar } from "./sidebar";
@@ -25,6 +25,7 @@ import { useScanStore } from "./state/scan";
 import { useExploreStore } from "./state/explore";
 import { useLicenseStore, attachLicenseEvents } from "./state/license";
 import { bootstrapMonitor } from "./state/monitor";
+import { bootstrapDupes } from "./state/dupes";
 import { preloadApplications } from "./state/applications";
 import { getBreadcrumb, type CrumbData } from "./viz/exploreIpc";
 import { invoke } from "./lib/ipc";
@@ -32,7 +33,7 @@ import { pushRecent } from "./sidebar/RecentSection";
 import { TourDriver } from "./shell/TourDriver";
 import { AppErrorBoundary } from "./shell/AppErrorBoundary";
 import { CheckIcon, ShieldIcon, Trash2Icon } from "./components/Icon";
-import { SPRING_TOAST, SWAP_ENTER, SWAP_EXIT } from "./lib/motion";
+import { SPRING_TOAST } from "./lib/motion";
 import { listen } from "./lib/ipc";
 import "./theme/tokens.css";
 import "./styles/base.css";
@@ -44,32 +45,33 @@ import "./styles/inspector.css";
 import "./styles/tabs.css";
 import "./styles/overlays.css";
 
-/** Veil swap wrapper (tab level): the entering view is a SOLID sheet
- * (CSS `background: var(--background)` on .db-tab-swap) that fades in
- * over the still-visible old one + settles 5 px; the old one stays
- * fully opaque beneath (its exit NEVER fades — no double exposure, no
- * "page in page" ghost) and unmounts covered. The exit's 0.999
- * opacity is a real tween (animating to the SAME value makes framer
- * shortcut-complete and hard-cut the old view at ~30 ms, while the
- * veil is barely 25% opaque); it holds the exit alive for SWAP_EXIT
- * so the unmount lands strictly after the sheet is opaque. `data-exiting` (from
- * useIsPresent, not DOM order — framer's sync mode can splice a
- * restored key back at its old index on rapid A→B→A, which inverts
- * :last-child) drives the CSS lift: the exiting wrapper is absolute +
- * pointer-dead from the first frame of the swap, and a live view is
- * never lifted. */
+/** Tab-swap wrapper (session-5 "settle-in" design, CSS-driven): the
+ * entering view fades 0→1 over the solid page background; the old view
+ * unmounts INSTANTLY (conditional render — no exit tween, no
+ * lingering layer). Two content layers are NEVER on screen at once,
+ * so the "page in page" double exposure is impossible by construction
+ * (the old veil kept the exiting view visible under a semi-transparent
+ * sheet for 200 ms — mid-ramp you literally saw both pages blended,
+ * plus a 5 px rise that read as zoom). The wrapper carries the solid
+ * `background: var(--background)` so the fade lands on the page's own
+ * color — no flash in dark mode.
+ *
+ * The fade is a pure CSS keyframe animation (`db-settle-in`, shell.css),
+ * NOT framer: framer drove the same tween via WAAPI while the inline
+ * style stayed `opacity: 0`, and its cleanup is asynchronous — for one
+ * full painted frame after the ramp completed the finished animation
+ * was already gone but the final inline style hadn't landed, so the
+ * element fell back to its initial `0` (a blank background-colored
+ * flash ~150 ms after EVERY switch — the residual blink). A CSS
+ * animation reverts to the element's underlying value (1) in the same
+ * style recalc the moment it ends — the gap cannot exist. It also runs
+ * on the compositor: main-thread jank while mounting the new view
+ * can never stutter it. */
 function TabSwap({ children }: { children: ReactNode }) {
-  const isPresent = useIsPresent();
   return (
-    <motion.div
-      className="db-tab-swap"
-      data-exiting={isPresent ? undefined : ""}
-      initial={{ opacity: 0, y: 5 }}
-      animate={{ opacity: 1, y: 0, pointerEvents: "auto", transition: SWAP_ENTER }}
-      exit={{ opacity: 0.999, y: 0, pointerEvents: "none", transition: SWAP_EXIT }}
-    >
+    <div className="db-tab-swap">
       {children}
-    </motion.div>
+    </div>
   );
 }
 
@@ -97,6 +99,9 @@ function AppShell() {
     attachLicenseEvents();
     void useLicenseStore.getState().load();
     useScanStore.getState().ensureListeners(); // scan-progress / scan-done / cleanup-committed (once)
+    // Duplicates: ONE persistent progress listener at boot — the
+    // scan lifecycle survives every tab switch (session-5 fix).
+    bootstrapDupes();
     // Sampler warms at BOOT, not at first Monitor-tab entry: the 2s
     // cadence is app-lifetime, so the tab renders live data the moment
     // it is opened (no mount-then-wait). See state/monitor.ts.
@@ -106,6 +111,33 @@ function AppShell() {
     // (no skeletons, no per-mount IPC round trip).
     preloadApplications();
   }, []);
+
+  // ── The "zoom" fix ────────────────────────────────────────────
+  // `.db-body` animates its grid tracks (the inspector toggle's 250 ms
+  // spring — a beloved WITHIN-Explore interaction). But a TAB switch
+  // also flips `has-inspector`, so the main column used to RESIZE under
+  // the content swap: the new view (and its canvas) mounted into a
+  // still-animating container — the "zoom in / zoom out" the user
+  // saw on every page change. For the swap's duration we snap the
+  // grid (`transition: none`): the new view mounts at its FINAL
+  // geometry and the fade is the only motion on screen. The inspector
+  // column's entrance no longer needs suppressing here — it is a
+  // class-driven transition now (shell.css) which never fires on
+  // mount. useLayoutEffect (NOT useEffect): the snap must reach the
+  // DOM BEFORE the browser paints the tab change — an effect lands one
+  // paint late and that first frame showed the grid track partially
+  // open (a ~10 px column jitter).
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const prevTab = useRef(tab);
+  useLayoutEffect(() => {
+    if (prevTab.current === tab) return;
+    prevTab.current = tab;
+    const el = bodyRef.current;
+    if (!el) return;
+    el.classList.add("db-tab-snap");
+    const t = window.setTimeout(() => el.classList.remove("db-tab-snap"), 280);
+    return () => window.clearTimeout(t);
+  }, [tab]);
 
   // Toast bus: any surface can raise a transient toast via the
   // `db-toast` window event (detail: { text, icon? }). The elevation
@@ -235,21 +267,21 @@ function AppShell() {
         queueOpen={queueOpen}
         onOpenLicense={() => setLicenseOpen(true)}
       />
-      <div className={`db-body ${inspectorVisible && tab === "explore" ? "has-inspector" : ""}`}>
+      <div ref={bodyRef} className={`db-body ${inspectorVisible && tab === "explore" ? "has-inspector" : ""}`}>
         <div className="db-sidebar-col">
           <Sidebar />
         </div>
         <div className="db-main-col">
-          {/* Tab VEIL swap (see TabSwap for the design). */}
-          <AnimatePresence initial={false}>
-            <TabSwap key={tab}>
-              {tab === "explore" && <ExploreView onPreview={openPreview} />}
-              {tab === "duplicates" && <DuplicatesView />}
-              {tab === "applications" && <ApplicationsView />}
-              {tab === "monitor" && <MonitorView />}
-              {tab === "snapshots" && <SnapshotsView />}
-            </TabSwap>
-          </AnimatePresence>
+          {/* Tab settle-in swap (see TabSwap): old view unmounts
+           * instantly, the new one fades in over the solid background
+           * at its FINAL geometry (the grid snapped — see bodyRef). */}
+          <TabSwap key={tab}>
+            {tab === "explore" && <ExploreView onPreview={openPreview} />}
+            {tab === "duplicates" && <DuplicatesView />}
+            {tab === "applications" && <ApplicationsView />}
+            {tab === "monitor" && <MonitorView />}
+            {tab === "snapshots" && <SnapshotsView />}
+          </TabSwap>
         </div>
         {/* Mounted whenever Explore is active (the track animates 0px ↔
          * --inspector-w; a conditional mount could only hard-snap) —

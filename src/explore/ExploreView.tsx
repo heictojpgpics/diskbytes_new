@@ -6,7 +6,7 @@
  * chip, preview) into every mode.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, animate, motion, useMotionValue, useTransform, useIsPresent } from "framer-motion";
+import { animate, motion, useMotionValue, useTransform } from "framer-motion";
 import { ExternalLinkIcon, FolderIcon, HardDriveIcon, ScanLineIcon, SquareIcon, UacShieldIcon } from "../components/Icon";
 import { EmptyState } from "../components/buttons";
 import { UnreadableNotice } from "../sidebar";
@@ -30,7 +30,6 @@ import { CANVAS_MODES } from "../state/vizUi";
 import { getHoverDetails } from "../viz/layoutIpc";
 import { getNodeDetails, type NodeDetailsData } from "../viz/exploreIpc";
 import { EVENTS, track } from "../lib/analytics";
-import { SWAP_ENTER, SWAP_EXIT } from "../lib/motion";
 
 /** Smoothly-rolling "N files · X GB" live counter (motion values, no
  * per-tick React re-render churn — the 150 ms IPC ticks TWEEN into each
@@ -51,25 +50,24 @@ function ScanCounter({ files, totalBytes }: { files: number; totalBytes: number 
   return <motion.span className="db-live-counter tnum">{text}</motion.span>;
 }
 
-/** Veil swap wrapper (stage/mode level — see App.tsx TabSwap for
- * the design): the entering view is a SOLID sheet fading in + rising
- * 5 px over the still-opaque old one; `data-exiting` from
- * useIsPresent drives the CSS lift, immune to framer's DOM
- * reordering on interrupted swaps. The old view's exit NEVER fades —
- * no double exposure (the "shadow/page-in-page" ghost), and the new
- * canvas's mount→fetch→paint window hides under the veil. */
+/** Stage-swap wrapper (mode level — see App.tsx TabSwap for the
+ * settle-in design): the entering mode fades 0→1 over the solid
+ * stage background; the old mode unmounts INSTANTLY. No lingering
+ * exit layer → no double exposure (the "shadow / page-in-page"
+ * ghost), no 5 px rise → no zoom read. The stage geometry is STABLE
+ * during mode switches (no grid change), so the entering canvas
+ * mounts at its final size — the fetch window (~1 IPC, cached on
+ * revisits) passes at opacity ≈ 0, invisible.
+ *
+ * CSS keyframe animation (`db-settle-in`), NOT framer — the same
+ * WAAPI async-cleanup gap as the tab level lived here (one blank
+ * frame ~150 ms after every mode switch); see TabSwap for the full
+ * story. */
 function StageSwap({ children }: { children: ReactNode }) {
-  const isPresent = useIsPresent();
   return (
-    <motion.div
-      className="db-stage-swap"
-      data-exiting={isPresent ? undefined : ""}
-      initial={{ opacity: 0, y: 5 }}
-      animate={{ opacity: 1, y: 0, pointerEvents: "auto", transition: SWAP_ENTER }}
-      exit={{ opacity: 0.999, y: 0, pointerEvents: "none", transition: SWAP_EXIT }}
-    >
+    <div className="db-stage-swap">
       {children}
-    </motion.div>
+    </div>
   );
 }
 
@@ -393,14 +391,11 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
         <UnreadableNotice />
       </div>
       <section ref={stageEl} className="db-visual-stage db-scroll" aria-label={`${mode} visualization`}>
-        {/* Mode-swap VEIL (see StageSwap for the design): the entering
-         * mode's solid sheet covers the old one — the new canvas's
-         * mount → fetch → paint window hides beneath the veil, the old
-         * view never fades (no ghost), and a stuck exit can never
-         * reflow the stage. `initial={false}` keeps the very first
-         * mount static. */}
-        <AnimatePresence initial={false}>
-          <StageSwap key={`${generation}:${currentFolder}:${mode}`}>
+        {/* Mode settle-in swap (see StageSwap): the old mode unmounts
+         * instantly; the new one fades in over the solid stage at its
+         * final geometry. `key` covers mode + folder + generation —
+         * every navigation reads as one gesture. */}
+        <StageSwap key={`${generation}:${currentFolder}:${mode}`}>
           {mode === "Folders" && (
             <FoldersMode
               generation={generation}
@@ -460,7 +455,6 @@ export function ExploreView({ onPreview }: { onPreview: (id: number) => void }) 
             />
           )}
         </StageSwap>
-        </AnimatePresence>
       </section>
 
       <HoverChip ref={chip} sizeFmt={bytes} />

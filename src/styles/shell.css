@@ -398,44 +398,65 @@
    * must overlay the entering one inside THIS column, not the page. */
   position: relative;
 }
-/* Tab-swap wrapper (App.tsx AnimatePresence VEIL swap): the ENTERING
- * view flows normally and fills the column as a SOLID sheet (the veil
- * — `background: var(--background)`); it fades in + settles 5px over
- * the old one, so the old content is progressively COVERED, never
- * blended with the new content (the crossfade's double-exposure read
- * as "page in page" ghosting, worst in dark mode). The old view's exit
- * never fades — it lingers fully opaque and unmounts covered. Any
- * EXITING view (data-exiting, set from useIsPresent — immune to
- * framer's DOM reordering on interrupted swaps) is lifted out of flow
- * by CSS alone — no JS measurement, no injected style rules, and never
- * a live view. A stuck or slow exit can never push the live view down
- * (the old popLayout approach had exactly that failure mode). All
- * wrappers are positioned so paint order follows DOM order. */
+/* Tab-swap wrapper (App.tsx settle-in swap, session-5): the entering
+ * view fills the column as a SOLID sheet (`background:
+ * var(--background)` — identical to the column's own background) and
+ * fades 0→1; the old view UNMOUNTS instantly (no exit tween, no
+ * lingering layer, no data-exiting machinery). Two content layers are
+ * never on screen at once, so the "page in page" double exposure is
+ * impossible — in dark mode too, because the fade lands on the page's
+ * own color, not over the old page.
+ *
+ * The fade is a CSS KEYFRAME animation, not framer: framer's WAAPI
+ * tween left the inline style at `opacity: 0` while the animation
+ * ran, and its async cleanup produced one painted frame where the
+ * finished animation was gone but the final style hadn't landed —
+ * the element flashed to the background ~150 ms after EVERY switch
+ * (the residual blink). A keyframe animation reverts to the
+ * underlying value (1) in the same style recalc the instant it
+ * ends; the gap cannot exist, and the tween runs on the compositor.
+ * `db-settle-in` is shared with .db-stage-swap (explore.css). */
 .db-tab-swap {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   position: relative;
-  /* The veil: a solid sheet carrying the entering view. Identical to
-   * the column's own background once opaque — invisible at rest, a
-   * gentle cover while animating. */
   background: var(--background);
-  /* Deterministic paint order: the LIVE sheet always paints above the
-   * lingering exiting view, regardless of the DOM order framer's sync
-   * mode happens to produce on interrupted swaps. */
-  z-index: 1;
+  animation: db-settle-in 130ms ease-out;
 }
-.db-tab-swap[data-exiting] {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  /* Dead the instant presence flips (same commit) — the framer exit
-   * transition's pointerEvents lands only when its DELAYED timeline
-   * starts, leaving a ~120 ms window where clicks on the half-faded
-   * entering view fall through to the old one's buttons. */
-  pointer-events: none;
+@keyframes db-settle-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
+/* The zoom fix (App.tsx bodyRef, useLayoutEffect): during a tab
+ * switch the body grid SNAPS (transition: none) instead of animating
+ * the inspector track 344px↔0 under the content swap — the new view
+ * mounts at its FINAL geometry and the settle-in fade is the only
+ * motion on screen. The 250 ms grid spring still runs for the
+ * WITHIN-Explore inspector toggle, which is the interaction it was
+ * built for. Transitions can't "restart" the way animations do when
+ * a suppression class lifts — a transition only fires on a value
+ * CHANGE, and at snap-lift the values are already final. */
+.db-body.db-tab-snap {
+  transition: none;
+}
+/* The inspector entrance is a CLASS-DRIVEN TRANSITION, not a mount
+ * animation: `has-inspector` flips the opacity/transform, so the
+ * entrance polish plays ONLY when the user toggles the inspector
+ * (the class lands on a live element → styles change → transition
+ * runs). A fresh mount WITH the class already present resolves to
+ * the final style in its FIRST style recalc — no transition, no
+ * slide-in on tab returns. (The old `db-inspector-in` keyframe
+ * animation fired on every mount, and the tab-snap suppression
+ * `animation: none` made it WORSE: removing the class 280 ms in
+ * re-applied the animation property, RESTARTING the entrance — the
+ * inspector column visibly blanked and re-slid after every return
+ * to Explore, a literal "double render".) */
 .db-body > .db-inspector-col {
   min-width: 0;
   min-height: 0;
@@ -443,20 +464,16 @@
   display: flex;
   border-left: 1px solid transparent;
   background: var(--panel);
-  animation: db-inspector-in var(--spring) ease both;
+  opacity: 0;
+  transform: translateX(16px);
+  transition:
+    opacity var(--spring) ease,
+    transform var(--spring) ease;
 }
 .db-body.has-inspector > .db-inspector-col {
   border-left: 1px solid var(--divider);
-}
-@keyframes db-inspector-in {
-  from {
-    opacity: 0;
-    transform: translateX(16px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+  opacity: 1;
+  transform: none;
 }
 
 /* Degrade banner (license) */

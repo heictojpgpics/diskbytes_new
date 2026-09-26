@@ -26,6 +26,13 @@ let monitorSession = 0;
  *  pending promise rejects with "cancelled" exactly like the engine. */
 let dupesCancelGen = 0;
 let dupesTicker: number | null = null;
+/** Mock mirror of the Rust app-lifetime dupes status (the page-switch
+ * fix): a running scan survives view unmounts, `dupes_status` serves
+ * the live snapshot / sticky result to a remounted view. */
+let dupesRunning = false;
+let dupesLastProgress: Record<string, unknown> | null = null;
+let dupesResult: Record<string, unknown> | null = null;
+let dupesError: string | null = null;
 const snapshots: { id: string; root: string; takenAt: number; total: number; folders: number; map: Map<string, number> }[] = [];
 let license = { posture: "unlicensed", isPro: false, tier: "", graceDaysLeft: 0, freeCommitCap: 1 * GB };
 let lastScanRoot = 0;
@@ -799,38 +806,62 @@ const commands: Record<string, Cmd> = {
   // ── duplicates ─────────────────────────────────────────────────────────────────
   // One invoke, one result — matches the engine contract. The ~900 ms
   // window runs the SAME progress cadence as Rust (phase → files →
-  // bytes every ~200 ms) so the busy row's live counters, throughput
-  // and bar are exercisable in the browser demo, and cancellation
+  // bytes every ~200 ms) with the session-5 DTO v2 (monotonic `overall`
+  // + cumulative `filesDoneAll`/`bytesDoneAll`), and the app-lifetime
+  // status record mirrors the Rust `AppState.dupes_status` — a page
+  // switch mid-scan re-attaches via `dupes_status`. Cancellation
   // rejects with "cancelled" exactly like the engine.
   find_duplicates: () =>
     new Promise((resolve, reject) => {
+      if (dupesRunning) {
+        reject("already running");
+        return;
+      }
+      dupesRunning = true;
+      dupesResult = null;
+      dupesError = null;
+      dupesLastProgress = null;
       const latch = dupesCancelGen;
       const started = performance.now();
       const totalFiles = 1_420;
       const totalBytes = 38.2 * GB;
       const cancelled = () => dupesCancelGen !== latch;
+      // Phase weights mirror the Rust PHASE_WEIGHTS (the global bar is
+      // monotonic across boundaries — no 100%→0% strobe).
       const phases: { phase: "collect" | "prefix" | "screen" | "full"; frac: number }[] = [
-        { phase: "collect", frac: 0.06 },
-        { phase: "prefix", frac: 0.42 },
-        { phase: "screen", frac: 0.14 },
-        { phase: "full", frac: 0.38 },
+        { phase: "collect", frac: 0.02 },
+        { phase: "prefix", frac: 0.45 },
+        { phase: "screen", frac: 0.13 },
+        { phase: "full", frac: 0.40 },
       ];
       const duration = 850 + Math.random() * 250;
-      const emit = (phase: string, frac: number) => {
-        emitMockEvent("dupes-progress", {
+      const emit = (phase: string, overall: number) => {
+        const idx = phases.findIndex((p) => p.phase === phase);
+        const start = phases.slice(0, idx).reduce((s, p) => s + p.frac, 0);
+        const span = phases[idx]?.frac ?? 0;
+        const frac = span > 0 ? Math.min(1, (overall - start) / span) : 0;
+        const known = phase !== "collect" && phase !== "done";
+        const ev = {
           phase,
-          filesDone: Math.round(totalFiles * frac),
-          filesTotal: phase === "collect" ? 0 : totalFiles,
-          bytesDone: Math.round(totalBytes * frac),
-          bytesTotal: phase === "collect" ? 0 : totalBytes,
+          filesDone: known ? Math.round(totalFiles * frac) : 0,
+          filesTotal: known ? totalFiles : 0,
+          bytesDone: known ? Math.round(totalBytes * frac) : 0,
+          bytesTotal: known ? totalBytes : 0,
           elapsedMs: Math.round(performance.now() - started),
-        });
+          filesDoneAll: Math.round(totalFiles * overall),
+          bytesDoneAll: Math.round(totalBytes * overall),
+          overall: Math.min(1, Math.max(0, overall)),
+        };
+        dupesLastProgress = ev;
+        emitMockEvent("dupes-progress", ev);
       };
       let t = 0;
       const step = () => {
         if (cancelled()) {
           if (dupesTicker !== null) window.clearInterval(dupesTicker);
           dupesTicker = null;
+          dupesRunning = false;
+          dupesLastProgress = null;
           reject("cancelled");
           return;
         }
@@ -850,17 +881,29 @@ const commands: Record<string, Cmd> = {
           window.clearInterval(dupesTicker);
           dupesTicker = null;
           emit("done", 1);
-          resolve({
+          const res = {
             generation: tree.generation,
             groups: DUPES,
             wastedTotal: DUPES.reduce((sm, g) => sm + g.wasted, 0),
             files: 3_821,
-          });
+          };
+          dupesRunning = false;
+          dupesResult = res;
+          dupesError = null;
+          dupesLastProgress = null;
+          resolve(res);
         }
       };
       dupesTicker = window.setInterval(step, 200);
       step();
     }),
+  dupes_status: () => ({
+    running: dupesRunning,
+    generation: tree.generation,
+    progress: dupesRunning ? dupesLastProgress : null,
+    result: dupesResult,
+    error: dupesError,
+  }),
   cancel_duplicates: () => {
     dupesCancelGen += 1;
     return dupesCancelGen;

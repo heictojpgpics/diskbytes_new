@@ -102,9 +102,15 @@
 }
 
 /* ── Duplicates ─────────────────────────────────────────────────────── */
-/* The live busy row: phase + counts + throughput + cancel, over a slim
- * indeterminate-to-determinate progress bar. Replaces the old static
- * "Hashing candidates…" line — a multi-GB hash now READS as work. */
+/* The live busy row (session-5, blink-free): phase dot + label +
+ * per-phase counts + cumulative rate/ETA + cancel, over a slim bar
+ * driven by the engine's MONOTONIC `overall` fraction. The row's
+ * structure is fully stable while busy — counts/rate spans never
+ * mount/unmount at phase boundaries (the old mount/unmount strobe
+ * read as "blinking / collecting-artifacts flicker"), and the row is
+ * an isolated memo component subscribing to the progress slice
+ * alone: 9 Hz ticks repaint ONE row, not the group-card list (the
+ * "progress bar lagging" fix). */
 .db-dupes-busy {
   align-items: stretch;
   padding: 14px 16px 12px;
@@ -122,15 +128,40 @@
   font-weight: 640;
   color: var(--text);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+/* Pulsing phase dot: the row's liveness affordance (pure transform +
+ * opacity — 60 fps, no layout). */
+.db-dupes-phase-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink);
+  flex: none;
+  animation: db-dupes-pulse 1.2s var(--ease-out) infinite;
+}
+@keyframes db-dupes-pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.78); }
+  100% { opacity: 1; transform: scale(1); }
 }
 .db-dupes-counts {
   color: var(--text-secondary);
   font-size: 11.5px;
-  flex: 1;
-  min-width: 0;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.db-dupes-rate {
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  margin-left: auto;
+  white-space: nowrap;
+  flex: none;
 }
 .db-dupes-bar {
   height: 3px;
@@ -145,7 +176,10 @@
   width: var(--pct, 0%);
   border-radius: inherit;
   background: var(--ink);
-  transition: width 0.25s var(--ease-out);
+  /* Monotonic source + linear pacing: ticks read as motion, never
+   * jumps, and the bar can never snap backwards (per-phase resets
+   * used to 100%→0% four times per scan). */
+  transition: width 0.24s linear;
 }
 .db-dup-group {
   border: 1px solid var(--border);
